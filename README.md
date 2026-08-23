@@ -1,5 +1,7 @@
 # Qwen3.8 27B 双 A770 基准测试记录 / Qwen3.8 27B Dual A770 Benchmark Report
 
+家人们，用你发财的小手点点右上角的星星⭐吧 / Dear friends, please click the star ⭐ at the top right with your lucky hand!
+
 **日期 / Date:** 2026-08-23
 
 ## 目录 / Contents
