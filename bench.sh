@@ -38,7 +38,7 @@ EOF
 
 [[ -f "$MODEL" ]] || err "找不到模型 $MODEL"
 
-# split 模式由各 runner 传入 (tensor 与 layer 不混用)
+# split 模式由各 runner 传入
 BENCH_ARGS=(
     -m "$MODEL"
     -ngl "$NGL"
@@ -81,7 +81,6 @@ run_sycl_mtp() {
     sycl_env "$SYCL_CLI_BIN"
     echo "== [5/5] SYCL + MTP 投机解码 (llama-cli, draft-n-max $DRAFT_N_MAX) =="
     echo "== draft: $(basename "$DRAFT_MODEL") | prompt: ${#PROMPT} 字符 =="
-    # 丢弃生成的正文, 只留 stderr 的统计输出
     "$SYCL_CLI_BIN" -m "$MODEL" -md "$DRAFT_MODEL" \
         --spec-type draft-mtp \
         --spec-draft-n-max "$DRAFT_N_MAX" \

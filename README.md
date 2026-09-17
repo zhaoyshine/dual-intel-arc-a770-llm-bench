@@ -17,10 +17,6 @@
 
 ## 1. 测试环境 / System Environment
 
-**中文：** 本测试在个人工作站上进行，双 A770 分别以 SYCL 与 Vulkan 后端跑 llama.cpp 推理基准。GT 1030 仅作显示输出，未参与推理。
-
-**English:** This benchmark ran on a personal workstation using two Arc A770 GPUs with the SYCL and Vulkan backends of llama.cpp. A GT 1030 handles display only and did not participate in inference.
-
 | 项目 / Item | 值 / Value |
 |---|---|
 | 操作系统 / OS | Fedora Linux 44 (KDE Plasma Desktop Edition) |
@@ -37,16 +33,12 @@
 
 ## 2. 软件版本 / Software Versions
 
-**中文：** llama.cpp 从源码编译，官方预编译单文件版（b10217）用作 Vulkan 对照。SYCL 需 Intel oneAPI 编译，Vulkan 用系统 GCC。
-
-**English:** llama.cpp built from source; the official prebuilt single binary (b10217) served as the Vulkan baseline. SYCL required the Intel oneAPI toolkit; Vulkan used the system GCC.
-
 | 组件 / Component | 版本 / Version | 备注 / Note |
 |---|---|---|
 | llama.cpp 源码 / Source | commit `8144f31` (master, 2026-08-23) | `git clone --depth 1` |
 | 官方预编译 / Official Prebuilt | b10217-ddd4ec142 (`~/.local/bin/llama`) | Vulkan 对照基准 / Vulkan baseline |
 | 自编译 SYCL 版 / Self-Built SYCL | 8144f31, `build-sycl/bin/` | `-DGGML_SYCL=ON -DGGML_SYCL_F16=ON` |
-| 自编译 Vulkan 版 / Self-Built Vulkan | 8144f31, `build-vulkan/bin/` | `-DGGML_VULKAN=ON` |
+| 自编译 Vulkan 版 / Self-Built Vulkan | 8144f31, `build-vulkan/bin/` | `-DGGML_VULKAN=ON`，系统 GCC / system GCC |
 | Intel oneAPI | 2026.1.1 (2026.1.1.20260724) | `intel-oneapi-toolkit` via yum |
 | DPC++ 编译器 / Compiler | icpx 2026.1.1 | 编译 SYCL 后端 / builds SYCL backend |
 | 模型 / Model | Qwen3.8-27B-UD-Q4_K_M.gguf, 15.32 GiB, 27.32 B params | unsloth GGUF |
@@ -55,9 +47,9 @@
 
 ## 3. 测试配置 / Benchmark Configs
 
-**中文：** 五种配置互为对照：同源码编译的 Vulkan 与 SYCL 对比（消除版本差异），官方预编译 Vulkan 作额外参考；SYCL 分 layer（逐层切分）与 tensor（张量并行）两种 split 模式；sycl-mtp 用官方 MTP 模块测投机解码。
+**中文：** SYCL 与 Vulkan 同源码编译，对比可消除版本差异；官方预编译 Vulkan 作额外参考。
 
-**English:** Five configs for cross-comparison: self-built Vulkan vs SYCL from the same source commit (eliminating version skew), the official prebuilt Vulkan as an extra reference, SYCL in both `layer` (layer-wise split) and `tensor` (tensor parallelism) split modes, and sycl-mtp measuring speculative decoding with the official MTP module.
+**English:** The self-built SYCL and Vulkan come from the same source commit, so the comparison rules out version skew; the official prebuilt Vulkan is an extra reference.
 
 | 配置 / Config | 二进制 / Binary | Split 模式 / Mode | 设备选择 / Device Select |
 |---|---|---|---|
@@ -71,16 +63,16 @@
 
 ## 4. 测试方法 / Methodology
 
-**中文：** 用 `llama-bench` 测纯计算吞吐：5120 token prompt 测 prefill（pp5120），128 token 生成测 decode（tg128），各重复 3 次取平均。所有配置统一：全部层 offload（ngl 999）、KV 缓存 f16、flash-attention 开启、`--ubatch-size 1024`。Vulkan 按卡分行输出（双卡各自独立测），SYCL 为双卡合并吞吐。
+**中文：** 各配置参数一致，每档重复 3 次取平均；Vulkan 按卡分行输出（双卡各自独立测），SYCL 为双卡合并吞吐。
 
-**English:** Pure compute throughput via `llama-bench`: 5120 prompt tokens for prefill (pp5120), 128 generated tokens for decode (tg128), 3 repeats averaged. Identical settings across all configs: full offload (ngl 999), f16 KV cache, flash-attention on, `--ubatch-size 1024`. Vulkan reports per-GPU rows; SYCL reports combined dual-GPU throughput.
+**English:** Identical settings across all configs, 3 repeats averaged per row. Vulkan reports per-GPU rows; SYCL reports combined dual-GPU throughput.
 
 ```sh
 llama-bench -m <model> -ngl 999 --cache-type-k f16 --cache-type-v f16 \
   --flash-attn on --ubatch-size 1024 -p 5120 -n 128 -r 3
 ```
 
-sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数与 start 脚本一致，见 [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding)。/ sycl-mtp uses llama-cli (llama-bench has no speculative support) with sampling identical to the start script; see [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding).
+sycl-mtp 用 llama-cli 测，采样参数与 start 脚本一致，见 [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding)。/ sycl-mtp uses llama-cli, with sampling identical to the start script; see [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding).
 
 ---
 
@@ -89,6 +81,8 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 **中文：** SYCL layer split 全面领先：prefill 合并吞吐 428 t/s（Vulkan 双卡合计约 225 t/s，快约 1.9 倍），decode 9.76 t/s（比 Vulkan 7.8 t/s 快约 25%）。tensor split 最慢——27B 逐层张量并行时，卡间 ring all-reduce 的 PCIe 通信开销大于收益。官方预编译与自编译 Vulkan 结果几乎一致，版本差异可忽略。Vulkan 慢并非 CPU 瓶颈：ngl 999 已全 offload（本机 CPU 跑 27B 上限仅约 pp 10 / tg 2 t/s），差距源于 Mesa Vulkan 驱动对 Arc 的优化弱于 Intel 自家 SYCL/oneDNN 路径。
 
 **English:** SYCL layer split wins across the board: combined prefill 428 t/s vs ~225 t/s for both Vulkan GPUs together (~1.9x), and decode 9.76 t/s vs 7.8 t/s (~25% faster). Tensor split is the slowest — per-layer tensor parallelism on a 27B model pays more in PCIe ring all-reduce traffic than it gains. The official prebuilt and self-built Vulkan results match closely, confirming version skew is negligible. The slower Vulkan numbers are not a CPU issue: ngl 999 keeps every layer on GPU (CPU on this machine tops out around pp 10 / tg 2 t/s for a 27B); the gap comes from the Mesa Vulkan driver's weaker ggml optimizations vs Intel's own SYCL/oneDNN path.
+
+> **注 / Note:** Vulkan 行值为每张卡处理自己分片的速度，非"只用了单卡"：prefill 阶段两卡并行，合并吞吐约为两行之和（~225 t/s）；decode 阶段两卡流水线作业、同一时刻仅一卡计算，故每行值即整体值。SYCL 为双卡合并吞吐。Each Vulkan row shows one GPU processing its half of the layers — both GPUs are active. During prefill they run in parallel (combined ≈ sum of the two rows, ~225 t/s); during decode they form a pipeline with one GPU computing at a time, so each row equals the overall rate. SYCL reports combined throughput.
 
 ### 5.1 Vulkan 官方预编译 / Official Prebuilt Vulkan
 | model                          |       size |     params | backend    | ngl |  fa | dev          |            test |                  t/s |
@@ -117,9 +111,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 
 #### 5.3.1 ubatch 对 prefill 吞吐的影响 / Effect of ubatch on prefill throughput (2026-09-05)
 
-**中文：** 复测时把 prompt 加长到 5120 token（pp5120）。调大 `--ubatch-size` 显著提升 prefill：默认值 → 432.7 t/s，1024 → 570.2 t/s，2048 → 637.4 t/s（较默认快约 47%）。注意 n_ubatch 只影响 prefill，且此表与 5.3 原表（pp512）不可直接对比。
+**中文：** 复测时把 prompt 加长到 5120 token（pp5120），调大 `--ubatch-size` 显著提升 prefill。注意 n_ubatch 只影响 prefill，且此表与 5.3 原表（pp512）不可直接对比。
 
-**English:** Re-measured with the prompt length raised to 5120 tokens (pp5120). Raising `--ubatch-size` boosts prefill sharply: default → 432.7 t/s, 1024 → 570.2 t/s, 2048 → 637.4 t/s (~47% faster than default). Note n_ubatch only affects prefill, and these rows are not directly comparable with the pp512 rows in 5.3.
+**English:** Re-measured with the prompt length raised to 5120 tokens (pp5120); raising `--ubatch-size` boosts prefill sharply. Note n_ubatch only affects prefill, and these rows are not directly comparable with the pp512 rows in 5.3.
 
 | model                          |       size |     params | backend    | ngl | n_ubatch |  fa |            test |                  t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | --: | -------: | --: | --------------: | -------------------: |
@@ -132,9 +126,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 
 #### 5.3.2 MTP 投机解码 / MTP speculative decoding (2026-09-05)
 
-**中文：** 用官方 Qwen3.8-27B MTP 模块（`mtp-Qwen3.8-27B-Q4_0.gguf`，1.3 GiB）作 draft 模型，主+draft 同跑双 A770。llama-bench 不支持投机参数，改用 llama-cli：真实中文推理题 533 字符（~400 token）prompt、ctx 100k（投机=主+draft 双 KV，15 GB 内存下 128k 会报 OUT_OF_HOST_MEMORY）、采样参数与 start 脚本一致（temp 1.0/top-k 20/top-p 0.95）、每档 2–3 次取均值。无投机 llama-cli 对照为 9.6 t/s，与 llama-bench tg 的 9.x 一致（两条路径可比）。
+**中文：** 用官方 Qwen3.8-27B MTP 模块（`mtp-Qwen3.8-27B-Q4_0.gguf`，1.3 GiB）作 draft 模型，主+draft 同跑双 A770。llama-bench 不支持投机参数，改用 llama-cli：真实中文推理题 533 字符（~400 token）prompt、ctx 100k（投机=主+draft 双 KV，15 GB 内存下 128k 会报 OUT_OF_HOST_MEMORY）、采样参数与 start 脚本一致、每档 2–3 次取均值。无投机 llama-cli 对照为 9.6 t/s，与 llama-bench tg 的 9.x 一致（两条路径可比）。
 
-**English:** Used the official Qwen3.8-27B MTP module (`mtp-Qwen3.8-27B-Q4_0.gguf`, 1.3 GiB) as a draft model, main+draft on both A770s. llama-bench has no speculative support, so llama-cli was used: real Chinese reasoning prompt (533 chars, ~400 tokens), ctx 100k (dual-KV for main+draft hits OUT_OF_HOST_MEMORY at 128k on the 15 GB host), sampling identical to the start script (temp 1.0/top-k 20/top-p 0.95), 2–3 runs averaged. The no-draft llama-cli baseline is 9.6 t/s, matching llama-bench's 9.x (both paths agree).
+**English:** Used the official Qwen3.8-27B MTP module (`mtp-Qwen3.8-27B-Q4_0.gguf`, 1.3 GiB) as a draft model, main+draft on both A770s. llama-bench has no speculative support, so llama-cli was used: real Chinese reasoning prompt (533 chars, ~400 tokens), ctx 100k (dual-KV for main+draft hits OUT_OF_HOST_MEMORY at 128k on the 15 GB host), sampling identical to the start script, 2–3 runs averaged. The no-draft llama-cli baseline is 9.6 t/s, matching llama-bench's 9.x (both paths agree).
 
 | draft 配置 / config | test | t/s |
 |---|---|---|
@@ -145,9 +139,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | MTP `--spec-draft-n-max 4` | tg128 | 14.0 |
 | MTP `--spec-draft-n-max 3` (xe) | tg128 | 19.6 |
 
-> **注 / Note:** 选型 `--spec-draft-n-max 3`（官方推荐，与 4 打平），**比无投机快约 48%**；长度 1 仅 +17%（draft 推理开销摊不薄），2 为 +33%。draft 模型已全 offload（`-ngld 999`）。测试入口 / Entry: `make bench sycl-mtp`
+> **注 / Note:** 选型 `--spec-draft-n-max 3`（官方推荐，与 4 打平），长度 1 的增益被 draft 推理开销摊薄。draft 模型已全 offload（`-ngld 999`）。测试入口 / Entry: `make bench sycl-mtp`
 >
-> `(xe)` 行为 2026-09-17 复测（内核 7.1.13，同一二进制），`--spec-draft-n-max 3` 连跑 4 次取均值：18.7 / 23.1 / 15.8 / 20.6 t/s，离散度大；同轮 prompt 速度 96.4 / 96.2 / 96.3 / 69.6 t/s。/ The `(xe)` row was re-measured 2026-09-17 (kernel 7.1.13, same binary): four runs of `--spec-draft-n-max 3`, averaged — 18.7 / 23.1 / 15.8 / 20.6 t/s, wide spread; prompt rates in those runs were 96.4 / 96.2 / 96.3 / 69.6 t/s.
+> `(xe)` 行为 2026-09-17 复测，`--spec-draft-n-max 3` 连跑 4 次均值 18.7 / 23.1 / 15.8 / 20.6 t/s，离散度大。/ The `(xe)` row was re-measured 2026-09-17: four runs of `--spec-draft-n-max 3` averaged 18.7 / 23.1 / 15.8 / 20.6 t/s, wide spread.
 
 ### 5.4 SYCL 张量并行 / SYCL tensor split
 | model                          |       size |     params | backend    | ngl |     sm |  fa |            test |                  t/s |
@@ -155,15 +149,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 | tensor |   1 |           pp512 |        325.07 ± 3.01 |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 | tensor |   1 |           tg128 |          3.99 ± 0.01 |
 
-> **注 / Note:** Vulkan 行值为每张卡处理自己分片的速度，非"只用了单卡"：prefill 阶段两卡并行，合并吞吐约为两行之和（~225 t/s）；decode 阶段两卡流水线作业、同一时刻仅一卡计算，故每行值即整体值。SYCL 为双卡合并吞吐。Each Vulkan row shows one GPU processing its half of the layers — both GPUs are active. During prefill they run in parallel (combined ≈ sum of the two rows, ~225 t/s); during decode they form a pipeline with one GPU computing at a time, so each row equals the overall rate. SYCL reports combined throughput.
-
 ---
 
 ## 6. 使用说明 / Usage
-
-**中文：** 入口统一收在 `Makefile`，每个目标只是转发到同名脚本，参数写法一致。
-
-**English:** All entry points live in the `Makefile`; each target just forwards to a script, so arguments are identical either way.
 
 ```sh
 make                     # 列出全部命令 / list all commands
