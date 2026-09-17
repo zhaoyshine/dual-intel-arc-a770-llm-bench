@@ -43,7 +43,7 @@ SYCL_CLI_BIN="${SYCL_CLI_BIN:-$HOME/workspace/ai/llama.cpp/build-sycl/bin/llama-
 # 运行参数对齐 start-qwen3.8-27b.sh (采样/ctx/ubatch), 保证投机测试与 server 一致
 MTP_MODEL="${MTP_MODEL:-$HOME/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/MTP/mtp-Qwen3.8-27B-Q4_0.gguf}"
 MTP_N_MAX="${MTP_N_MAX:-3}"  # draft 长度; 实测 3 最优, 4 打平, 1 仅 +17%
-MTP_CTX="${MTP_CTX:-102400}" # 比 start 的 131072 小: 投机=主+draft 双 KV, 15GB RAM 上限
+MTP_CTX="${MTP_CTX:-102400}" # 投机=主+draft 双 KV, 15GB RAM 上限 (start 脚本保守取 90000)
 # 默认提示词: 真实"高级问题" (~600 token), 让模型认真思考输出
 # 别用重复短句——输出会和输入同分布, 无法代表真实场景
 if [ -z "${MTP_PROMPT:-}" ]; then

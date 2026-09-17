@@ -162,9 +162,19 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 ### 服务启动 / Start Server (SYCL)
 
 ```sh
-./start-qwen3.8-27b.sh                    # llama-server, OpenAI 兼容 API / OpenAI-compatible, 127.0.0.1:8080
+./start-qwen3.8-27b.sh                    # 默认 mtp: MTP 投机, ctx 90k; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
+./start-qwen3.8-27b.sh nomtp              # 关投机: 单 KV, ctx 120k (上下文更长, decode 慢约 1/3)
 curl http://127.0.0.1:8080/v1/chat/completions
 ```
+
+两种模式 / Two modes:
+
+| 模式 / Mode | ctx | KV | decode 速度 / speed |
+|---|---|---|---|
+| `mtp`（默认 / default） | 90000 | 主 + draft 双份 / main + draft | 约 +48%（见 [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding)） |
+| `nomtp` | 122880 | 单份 / single | 基线 / baseline (9.6 t/s) |
+
+> MTP 模式 draft 与主模型各占一份 KV，128k 在 15 GB 主机内存下会 `OUT_OF_HOST_MEMORY`，故 90k；关掉投机后单 KV 可放到 120k。/ In MTP mode the draft and main model each hold a KV cache, and 128k hits `OUT_OF_HOST_MEMORY` on the 15 GB host, hence 90k; with speculation off a single KV fits 120k.
 
 ### 编译 / Build
 
