@@ -2,7 +2,7 @@
 
 家人们，用你发财的小手点点右上角的星星⭐吧 / Dear friends, please click the star ⭐ at the top right with your lucky hand!
 
-**日期 / Date:** 2026-08-23 初测，2026-09-05 补充 ubatch / MTP 复测 / Initial run 2026-08-23, ubatch / MTP follow-ups 2026-09-05
+**日期 / Date:** 2026-08-23 初测，2026-09-05 补充 ubatch / MTP 复测，2026-09-17 补充 xe 驱动复测 / Initial run 2026-08-23, ubatch / MTP follow-ups 2026-09-05, xe driver follow-up 2026-09-17
 
 ## 目录 / Contents
 
@@ -24,7 +24,7 @@
 | 项目 / Item | 值 / Value |
 |---|---|
 | 操作系统 / OS | Fedora Linux 44 (KDE Plasma Desktop Edition) |
-| 内核 / Kernel | 7.1.7-200.fc44.x86_64 |
+| 内核 / Kernel | 7.1.13-200.fc44.x86_64（初测为 7.1.7 / 7.1.7 at initial run） |
 | CPU | AMD Ryzen 9 5900X, 12C/24T |
 | 内存 / RAM | 15 GiB |
 | GPU 1 | Intel Arc A770 16GB (DG2) — level_zero:0 / Vulkan1 |
@@ -111,6 +111,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | ------------------------------ | ---------: | ---------: | ---------- | --: | --: | --------------: | -------------------: |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |   1 |           pp512 |        428.01 ± 5.12 |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |   1 |           tg128 |          9.76 ± 0.01 |
+| qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL (xe)  | 999 |   1 |           tg128 |         13.90 ± 0.06 |
+
+> **注 / Note:** `SYCL (xe)` 行为 2026-09-17 xe 驱动复测，参数与二进制同 i915 行，说明见 [5.3.1](#531-ubatch-对-prefill-吞吐的影响--effect-of-ubatch-on-prefill-throughput-2026-09-05)。/ The `SYCL (xe)` row comes from the 2026-09-17 xe driver re-measurement, same params and binary as the i915 rows; see 5.3.1.
 
 #### 5.3.1 ubatch 对 prefill 吞吐的影响 / Effect of ubatch on prefill throughput (2026-09-05)
 
@@ -123,6 +126,9 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |  512(默认) |   1 |          pp5120 |        432.73 ± 0.18 |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |     1024 |   1 |          pp5120 |        570.16 ± 0.30 |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |     2048 |   1 |          pp5120 |        637.37 ± 0.21 |
+| qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL (xe)  | 999 |     1024 |   1 |          pp5120 |        538.93 ± 0.08 |
+
+> **注 / Note:** `SYCL (xe)` 行 prefill 比 i915 的 570.16 低约 5%（二进制 2026-09-05 构建，运行时打印 `warning: asserts enabled`）。/ The `SYCL (xe)` row's prefill runs ~5% below the i915 570.16 (binary built 2026-09-05, prints `warning: asserts enabled`).
 
 #### 5.3.2 MTP 投机解码 / MTP speculative decoding (2026-09-05)
 
@@ -137,8 +143,11 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | MTP `--spec-draft-n-max 2` | tg128 | 12.8 |
 | MTP `--spec-draft-n-max 3` | tg128 | 14.2 |
 | MTP `--spec-draft-n-max 4` | tg128 | 14.0 |
+| MTP `--spec-draft-n-max 3` (xe) | tg128 | 19.6 |
 
-> **注 / Note:** 选型 `--spec-draft-n-max 3`（官方推荐，与 4 打平），**比无投机快约 48%**；长度 1 仅 +17%（draft 推理开销摊不薄），2 为 +33%。draft 模型已全 offload（`-ngld 999`）。测试入口：`./bench-qwen3.8-27b.sh sycl-mtp`。/ Chose `--spec-draft-n-max 3` (official recommendation, ties with 4), **~48% faster than no speculation**; length 1 only +17% (draft overhead not amortized), 2 gives +33%. The draft model is fully offloaded (`-ngld 999`). Entry: `./bench-qwen3.8-27b.sh sycl-mtp`.
+> **注 / Note:** 选型 `--spec-draft-n-max 3`（官方推荐，与 4 打平），**比无投机快约 48%**；长度 1 仅 +17%（draft 推理开销摊不薄），2 为 +33%。draft 模型已全 offload（`-ngld 999`）。测试入口 / Entry: `make bench sycl-mtp`
+>
+> `(xe)` 行为 2026-09-17 复测（内核 7.1.13，同一二进制），`--spec-draft-n-max 3` 连跑 4 次取均值：18.7 / 23.1 / 15.8 / 20.6 t/s，离散度大；同轮 prompt 速度 96.4 / 96.2 / 96.3 / 69.6 t/s。/ The `(xe)` row was re-measured 2026-09-17 (kernel 7.1.13, same binary): four runs of `--spec-draft-n-max 3`, averaged — 18.7 / 23.1 / 15.8 / 20.6 t/s, wide spread; prompt rates in those runs were 96.4 / 96.2 / 96.3 / 69.6 t/s.
 
 ### 5.4 SYCL 张量并行 / SYCL tensor split
 | model                          |       size |     params | backend    | ngl |     sm |  fa |            test |                  t/s |
@@ -152,38 +161,47 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 
 ## 6. 使用说明 / Usage
 
-### 基准测试 / Benchmark
+**中文：** 入口统一收在 `Makefile`，每个目标只是转发到同名脚本，参数写法一致。
+
+**English:** All entry points live in the `Makefile`; each target just forwards to a script, so arguments are identical either way.
 
 ```sh
-./bench-qwen3.8-27b.sh                    # 串行跑全部五种 / run all five
-./bench-qwen3.8-27b.sh sycl               # 单种 / one: vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp
-```
-
-### 服务启动 / Start Server (SYCL)
-
-```sh
-./start-qwen3.8-27b.sh                    # 默认 mtp: MTP 投机, ctx 90k; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
-./start-qwen3.8-27b.sh nomtp              # 关投机: 单 KV, ctx 120k (上下文更长, decode 慢约 1/3)
+make                     # 列出全部命令 / list all commands
+make build               # 编译 SYCL 后端 / build the SYCL backend
+make bench               # 串行跑全部五种 / run all five configs
+make bench sycl          # 单种 / one of: vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp
+make start               # 默认 mtp: MTP 投机, ctx 90k; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
+make start base          # 关投机 / speculation off: 单 KV, ctx 120k (上下文更长, decode 慢约 1/3)
+make devices             # 列出 llama.cpp 可见设备 / list visible devices
 curl http://127.0.0.1:8080/v1/chat/completions
 ```
 
-两种模式 / Two modes:
+两种启动模式 / Two start modes:
 
 | 模式 / Mode | ctx | KV | decode 速度 / speed |
 |---|---|---|---|
 | `mtp`（默认 / default） | 90000 | 主 + draft 双份 / main + draft | 约 +48%（见 [5.3.2](#532-mtp-投机解码--mtp-speculative-decoding)） |
-| `nomtp` | 122880 | 单份 / single | 基线 / baseline (9.6 t/s) |
+| `base` | 122880 | 单份 / single | 基线 / baseline (9.6 t/s) |
 
 > MTP 模式 draft 与主模型各占一份 KV，128k 在 15 GB 主机内存下会 `OUT_OF_HOST_MEMORY`，故 90k；关掉投机后单 KV 可放到 120k。/ In MTP mode the draft and main model each hold a KV cache, and 128k hits `OUT_OF_HOST_MEMORY` on the 15 GB host, hence 90k; with speculation off a single KV fits 120k.
+
+### GPU 驱动切换 i915 / xe / Switching the GPU Kernel Driver
+
+**中文：** A770 由 i915 驱动（内核默认），也可切到新的 xe，切换只改引导参数，重启生效：
+
+**English:** The A770s run on i915 (kernel default) and can be switched to xe; only boot parameters change, effective after reboot:
+
+```sh
+make driver-status       # 当前驱动 + 引导参数
+make driver-xe           # 切 xe (sudo grubby + dracut -f)
+make driver-i915         # 切回 i915
+```
 
 ### 编译 / Build
 
 ```sh
-# SYCL: 推荐用脚本 (含 Level Zero 规范头检查) / recommended: script (with Level Zero header check)
-./rebuild-sycl.sh                         # 依赖 oneAPI / requires oneAPI: sudo yum install intel-oneapi-toolkit
-# 或手动 / or manually:
-cmake -B build-sycl -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
-cmake --build build-sycl --config Release -j 24 --target llama-bench llama-server
+make build                # SYCL: 依赖 oneAPI, 含 Level Zero 头文件检查 / requires oneAPI, checks the Level Zero header
+                          # sudo dnf install intel-oneapi-toolkit oneapi-level-zero-devel
 
 # Vulkan (依赖 vulkan-headers glslc spirv-headers-devel vulkan-loader-devel)
 cmake -B build-vulkan -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
