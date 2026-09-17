@@ -128,7 +128,7 @@ sycl-mtp 用 llama-cli 测（llama-bench 不支持投机参数），采样参数
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL       | 999 |     2048 |   1 |          pp5120 |        637.37 ± 0.21 |
 | qwen35 27B Q4_K - Medium       |  15.32 GiB |    27.32 B | SYCL (xe)  | 999 |     1024 |   1 |          pp5120 |        538.93 ± 0.08 |
 
-> **注 / Note:** `SYCL (xe)` 行 prefill 比 i915 的 570.16 低约 5%（二进制 2026-09-05 构建，运行时打印 `warning: asserts enabled`）。/ The `SYCL (xe)` row's prefill runs ~5% below the i915 570.16 (binary built 2026-09-05, prints `warning: asserts enabled`).
+> **注 / Note:** `SYCL (xe)` 行 prefill 比 i915 的 570.16 低约 5%。/ The `SYCL (xe)` row's prefill runs ~5% below the i915 570.16.
 
 #### 5.3.2 MTP 投机解码 / MTP speculative decoding (2026-09-05)
 
