@@ -6,9 +6,9 @@
 
 如无意外，本项目的配置是运行速度、输出质量与 context 长度的最佳平衡；若后续无大变更，则不再继续测试。
 
-- 运行速度：SYCL layer split + MTP 投机解码，prefill 575.77 t/s，decode 约 25 t/s
+- 运行速度：SYCL layer split prefill 490.21 t/s (pp5120)，decode 14.19 t/s (tg256)；MTP 投机解码 200k context 实测 prompt 204.0 / generation 23.2 t/s
 - 输出质量：q8_0 KV cache，相比 f16 KV 的质量损失可忽略
-- context 长度：180k token，够一到两个小任务跑完整上下文
+- context 长度：200k token，够一到两个小任务跑完整上下文
 
 ## 目录
 

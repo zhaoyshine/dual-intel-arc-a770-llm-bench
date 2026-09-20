@@ -6,9 +6,9 @@ Friends, please tap the star ⭐ in the top-right corner!
 
 Barring surprises, the configuration in this repo is the best balance of runtime speed, output quality, and context length; absent major changes, no further benchmarking is planned.
 
-- Speed: SYCL layer split + MTP speculative decoding, prefill 575.77 t/s, decode ~25 t/s
+- Speed: SYCL layer split prefill 490.21 t/s (pp5120), decode 14.19 t/s (tg256); MTP speculative decoding at 200k context measured 204.0 t/s prompt / 23.2 t/s generation
 - Quality: q8_0 KV cache, negligible quality loss versus f16 KV
-- Context: 180k tokens, enough for one or two small tasks end to end
+- Context: 200k tokens, enough for one or two small tasks end to end
 
 ## Contents
 

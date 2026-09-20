@@ -19,14 +19,14 @@ NGL=999
 KV_TYPE=q8_0
 FA=on
 PP=5120
-TG=128
+TG=256
 REPEATS=3
-DRAFT_N_MAX=3
+DRAFT_N_MAX=2
 MTP_DEVICE=SYCL0
 MAIN_TS=0.47,0.53
-MTP_CTX=180000
-BS=2048
-UBS=1024
+MTP_CTX=200000
+BS=1920
+UBS=640
 REASONING_EFFORT=medium
 
 # 别用重复短句当提示词——输出与输入同分布, 无法代表真实场景
@@ -100,7 +100,7 @@ run_sycl_mtp() {
         --flash-attn "$FA" \
         --batch-size "$BS" \
         --ubatch-size "$UBS" \
-        -c "$MTP_CTX" -p "$PROMPT" -n "$TG" \
+        -c "$MTP_CTX" -p "$PROMPT" -n 512 \
         --temp 1.0 --top-k 20 --top-p 0.95 --min-p 0.0 \
         --presence-penalty 0.0 --repeat-penalty 1.0 \
         --reasoning-budget 4096 \
