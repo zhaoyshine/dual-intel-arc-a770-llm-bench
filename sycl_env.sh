@@ -1,7 +1,7 @@
 #!/bin/bash
-# SYCL 运行环境库, 被 bench.sh / start.sh source。
-# 手动拼 LD_LIBRARY_PATH 而不 source setvars.sh: 只用 compiler/dnnl/umf 三个 lib 目录 + 动态查到的 hwloc。
-# 缺依赖时 level_zero adapter 加载失败: "No device of requested type available"
+# SYCL 运行环境 (oneAPI 库路径 + 设备选择), 被 bench.sh / start.sh source
+# 手动拼 LD_LIBRARY_PATH 而不 source setvars.sh: 只需 compiler/dnnl/umf 三个 lib 目录 + 动态查到的 hwloc
+# 缺依赖时 level_zero adapter 加载失败, 报 "No device of requested type available"
 
 err() { echo "错误: $*" >&2; exit 1; }
 

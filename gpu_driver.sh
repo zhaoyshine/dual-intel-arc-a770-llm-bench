@@ -1,11 +1,11 @@
 #!/bin/bash
 # 切换 Intel Arc A770 内核驱动 i915 / xe (改引导参数 + 重建 initramfs, 重启生效)
 # 用法: ./gpu_driver.sh status|i915|xe
-# 切 xe 要显式 force_probe: DG2 内核对 i915 是默认, xe 不是。
 
 set -euo pipefail
 
-PCI_ID=8086:56a0        # DG2 [Arc A770]
+# 内核默认将 DG2 交给 i915, 切 xe 须显式 force_probe
+PCI_ID=8086:56a0        # A770 (DG2)
 ARGS_XE="xe.force_probe=56a0 i915.force_probe=!56a0"
 ARGS_I915="i915.force_probe=56a0 xe.force_probe=!56a0"
 
@@ -57,7 +57,7 @@ set_driver() {
         --args="$args"
     sudo dracut -f
     echo "已切到 $driver, 重启生效: sudo systemctl reboot"
-    echo "重启后 ./gpu_driver.sh status 应显示 $driver"
+    echo "重启后验证: ./gpu_driver.sh status"
 }
 
 [[ -n "$(a770_devs)" ]] || err "没找到 A770 ($PCI_ID)"

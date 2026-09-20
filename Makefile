@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .PHONY: help build bench start devices driver-status driver-xe driver-i915
 
 help:
-	@echo "make build               编译 SYCL 后端 (build_sycl.sh)"
+	@echo "make build               编译 SYCL + Vulkan 后端"
 	@echo "make bench [配置]        跑基准; 不带参数跑全部"
 	@echo "                         配置: vulkan-official vulkan sycl sycl-tensor sycl-mtp"
 	@echo "make start [模式]        启动 llama-server; 模式: mtp (默认) base"
@@ -15,6 +15,7 @@ help:
 
 build:
 	./build_sycl.sh
+	./build_vulkan.sh
 
 bench:
 	./bench.sh $(filter-out $@,$(MAKECMDGOALS))

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动 Qwen3.8 27B (Q4_K_M) — 2x Arc A770, SYCL 后端 (llama-server, OpenAI 兼容)
+# 启动 Qwen3.8 27B (Q5_K_M) — 2x Arc A770, SYCL 后端 (llama-server, OpenAI 兼容)
 # 依赖: ~/workspace/ai/llama.cpp/build-sycl (编译: ./build_sycl.sh)
 # 用法: ./start.sh [mtp|base]
 
@@ -12,20 +12,27 @@ source "$SCRIPT_DIR/sycl_env.sh"
 MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf
 DRAFT_MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
 SYCL_BIN=~/workspace/ai/llama.cpp/build-sycl/bin/llama-server
-HOST=127.0.0.1          # 局域网访问改 0.0.0.0
+HOST=127.0.0.1
 PORT=8080
+# 最优参数
 NGL=999
-KV_TYPE=f16
+KV_TYPE=q8_0
+FA=on
 DRAFT_N_MAX=3
-MTP_CTX=90000
-BASE_CTX=122880
+MTP_DEVICE=SYCL0
+MAIN_TS=0.47,0.53
+MTP_CTX=180000
+BASE_CTX=180000
+BS=2048
+UBS=1024
+REASONING_EFFORT=medium
 
 usage() {
     cat <<'EOF'
 用法: ./start.sh [mtp|base]
 
-  mtp   默认. 开 MTP 投机解码 (主模型 + draft 双 KV), ctx 90k, decode 快约 48%
-  base  关投机 (单 KV), ctx 120k, 上下文更长, decode 慢约 1/3
+  mtp   默认 MTP 投机解码 建议开启
+  base  关闭 MTP 投机解码
 EOF
 }
 
@@ -57,8 +64,8 @@ ARGS=(
     -c "$CTX"
     --cache-type-k "$KV_TYPE"
     --cache-type-v "$KV_TYPE"
-    --flash-attn on
-    # 采样为官方「思考模式」推荐值; 非思考模式改 temp 0.7, top-p 0.80, presence 1.5
+    --flash-attn "$FA"
+    # 采样为官方思考模式推荐值; 非思考模式应改 temp 0.7, top-p 0.80, presence 1.5
     --temp 1.0
     --top-k 20
     --top-p 0.95
@@ -67,7 +74,9 @@ ARGS=(
     --repeat-penalty 1.0
     --n-predict 32768
     --reasoning-budget 4096
-    --ubatch-size 1024
+    --reasoning-effort "$REASONING_EFFORT"
+    --batch-size "$BS"
+    --ubatch-size "$UBS"
 )
 
 if [[ "$MODE" == mtp ]]; then
@@ -75,9 +84,13 @@ if [[ "$MODE" == mtp ]]; then
         -md "$DRAFT_MODEL"
         --spec-type draft-mtp
         --spec-draft-n-max "$DRAFT_N_MAX"
+        --cache-type-k-draft "$KV_TYPE"
+        --cache-type-v-draft "$KV_TYPE"
         -ngld 999
+        -devd "$MTP_DEVICE"
+        -ts "$MAIN_TS"
     )
-    echo "模式: mtp (MTP 投机解码, draft-n-max $DRAFT_N_MAX) | ctx $CTX"
+    echo "模式: mtp (MTP 投机解码, draft-n-max $DRAFT_N_MAX) | ctx $CTX | MTP 卡 $MTP_DEVICE | 主模型 -ts $MAIN_TS"
 else
     echo "模式: base (无投机, 单 KV) | ctx $CTX"
 fi
