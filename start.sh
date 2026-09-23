@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/sycl_env.sh"
 
 MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf
 DRAFT_MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
+MODEL_ALIAS=qwen3.8-27b
 SYCL_BIN=~/workspace/ai/llama.cpp/build-sycl/bin/llama-server
 HOST=127.0.0.1
 PORT=8080
@@ -18,11 +19,11 @@ PORT=8080
 NGL=999
 KV_TYPE=q8_0
 FA=on
-DRAFT_N_MAX=2
+DRAFT_N_MAX=3
 MTP_DEVICE=SYCL0
 MAIN_TS=0.47,0.53
 MTP_CTX=200000
-BASE_CTX=200000
+BASE_CTX=260000
 BS=1920
 UBS=640
 REASONING_EFFORT=medium
@@ -59,6 +60,7 @@ sycl_env "$SYCL_BIN"
 
 ARGS=(
     -m "$MODEL"
+    --alias "$MODEL_ALIAS"
     --split-mode layer
     -ngl "$NGL"
     -c "$CTX"

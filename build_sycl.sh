@@ -30,6 +30,9 @@ fi
 
 cd "$LLAMA_DIR"
 
+git checkout -- .
+git pull
+
 # cmake --build 的 auto-reconfigure 不重跑 find_path, 装新依赖头后须显式 configure
 echo "== configure $BUILD_DIR =="
 cmake -B "$BUILD_DIR" -DGGML_SYCL=ON \

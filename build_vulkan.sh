@@ -19,6 +19,9 @@ command -v glslc >/dev/null 2>&1 ||
 
 cd "$LLAMA_DIR"
 
+git checkout -- .
+git pull
+
 echo "== configure $BUILD_DIR =="
 cmake -B "$BUILD_DIR" -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
 
