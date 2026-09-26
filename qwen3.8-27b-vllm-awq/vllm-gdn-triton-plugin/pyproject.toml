@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-gdn-triton-plugin"
+version = "0.1.0"
+description = "Route the Qwen GDN layer through the FLA triton implementation instead of the XPU SYCL kernels"
+
+[project.entry-points."vllm.general_plugins"]
+gdn_triton = "vllm_gdn_triton:register"
+
+[tool.setuptools]
+packages = ["vllm_gdn_triton"]

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-xpu-platform-plugin"
+version = "0.1.0"
+description = "Force vLLM to select the XPU platform when NVML also reports a CUDA-capable device"
+
+[project.entry-points."vllm.platform_plugins"]
+xpu_override = "vllm_xpu_platform:xpu_platform_plugin"
+
+[tool.setuptools]
+packages = ["vllm_xpu_platform"]
