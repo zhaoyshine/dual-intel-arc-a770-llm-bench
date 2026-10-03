@@ -33,7 +33,7 @@ Barring surprises, the configuration in this repo is the best balance of runtime
 | GPU 1 | Intel Arc A770 16GB (DG2) — level_zero:0 / Vulkan1 |
 | GPU 2 | Intel Arc A770 16GB (DG2) — level_zero:1 / Vulkan2 |
 | GPU 3 (display) | NVIDIA GeForce GT 1030 2GB — Vulkan0 |
-| bifurcation card | Intel PCIe switch (Device 4fa0, 07:00.0) splits PCIe 4.0 x16 into x8+x8 |
+| bifurcation card | Intel PCIe switch (4fa0), both A770s linked at PCIe 3.0 x8 |
 | GPU Drivers | intel-level-zero 26.22.38646, intel-opencl 26.22.38646, vulkan-loader 1.4.341, mesa 26.1.6 |
 | Kernel driver | xe (`xe.force_probe=56a0`), both A770s |
 
@@ -104,7 +104,7 @@ llama-bench has no speculative-decoding flags, so sycl-mtp is measured with llam
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     | pp5120 | 575.77 ± 0.13 |
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     |  tg128 |  14.21 ± 0.00 |
 
-### 5.4 SYCL tensor split, dual-GPU combined
+### 5.4 SYCL tensor split, dual-GPU combined (PCIe 3.0 x8 link)
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |     sm |  fa |    dev |   test |           t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | -----: | --: | -----: | -----: | ------------: |
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | both     | pp5120 | 48.34 ± 0.01 |

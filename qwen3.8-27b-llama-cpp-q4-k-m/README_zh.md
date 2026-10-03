@@ -33,7 +33,7 @@
 | GPU 1 | Intel Arc A770 16GB (DG2) — level_zero:0 / Vulkan1 |
 | GPU 2 | Intel Arc A770 16GB (DG2) — level_zero:1 / Vulkan2 |
 | GPU 3 (显示) | NVIDIA GeForce GT 1030 2GB — Vulkan0 |
-| 拆分卡 | Intel PCIe switch (Device 4fa0, 07:00.0)，将 PCIe 4.0 x16 拆分为 x8+x8 |
+| 拆分卡 | Intel PCIe switch (4fa0)，两张 A770 链路 PCIe 3.0 x8 |
 | 显卡驱动 | intel-level-zero 26.22.38646, intel-opencl 26.22.38646, vulkan-loader 1.4.341, mesa 26.1.6 |
 | 内核驱动 | xe (`xe.force_probe=56a0`)，两张 A770 |
 
@@ -104,7 +104,7 @@ llama-bench 不支持投机参数，sycl-mtp 改用 llama-cli 测，采样参数
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 | pp5120 | 575.77 ± 0.13 |
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 |  tg128 |  14.21 ± 0.00 |
 
-### 5.4 SYCL 张量并行（双卡合并）
+### 5.4 SYCL 张量并行（双卡合并，链路 PCIe 3.0 x8）
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |     sm |  fa | dev  |   test |           t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | -----: | --: | ---- | -----: | ------------: |
 | qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | 双卡 | pp5120 | 48.34 ± 0.01 |

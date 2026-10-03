@@ -89,7 +89,7 @@ Each case runs in its own process group, with 8 s of rest between cases. Both co
 
 | Config | pp1024 (1024 in / 1 out) | tg32 (1 in / 32 out) |
 |---|---|---|
-| TP2 | 8.948 s — 114.43 t/s | 3.326 s — 9.62 t/s |
+| TP2 (tensor parallel, PCIe 3.0 x8 link) | 8.948 s — 114.43 t/s | 3.326 s — 9.62 t/s |
 | PP2 | 14.052 s — 72.87 t/s | 2.833 s — 11.29 t/s |
 
 ---

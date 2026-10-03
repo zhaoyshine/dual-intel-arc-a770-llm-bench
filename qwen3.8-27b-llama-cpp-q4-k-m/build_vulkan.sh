@@ -7,7 +7,7 @@ set -euo pipefail
 
 LLAMA_DIR=~/workspace/ai/llama.cpp
 BUILD_DIR=build-vulkan
-NJOBS=24
+NJOBS=12
 TARGETS=(llama-bench)
 
 err() { echo "错误: $*" >&2; exit 1; }
