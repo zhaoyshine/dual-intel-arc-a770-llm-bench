@@ -1,6 +1,6 @@
 #!/bin/bash
-# Qwen3.8 27B (Q4_K_M) 基准测试 — 双 Arc A770, 五种配置
-# 用法: ./bench.sh [all|vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|devices]
+# Qwen3.8 27B (Q4_K_M) 基准测试 — 双 Arc A770, 六种配置
+# 用法: ./bench.sh [all|vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp|devices]
 
 set -euo pipefail
 
@@ -56,27 +56,27 @@ BENCH_ARGS=(
 
 run_vulkan_official() {
     [[ -x "$VULKAN_OFFICIAL_BIN" ]] || { echo "错误: 找不到 $VULKAN_OFFICIAL_BIN" >&2; return 1; }
-    echo "== [1/5] Vulkan 官方预编译 =="
+    echo "== [1/6] Vulkan 官方预编译 =="
     "$VULKAN_OFFICIAL_BIN" bench --device Vulkan1,Vulkan2 --split-mode layer "${BENCH_ARGS[@]}"
 }
 
 run_vulkan() {
     [[ -x "$VULKAN_BIN" ]] || { echo "错误: 找不到 $VULKAN_BIN (需先编译 build-vulkan)" >&2; return 1; }
-    echo "== [2/5] Vulkan 自编译 (build-vulkan) =="
+    echo "== [2/6] Vulkan 自编译 (build-vulkan) =="
     "$VULKAN_BIN" --device Vulkan1,Vulkan2 --split-mode layer "${BENCH_ARGS[@]}"
 }
 
 run_sycl() {
     [[ -x "$SYCL_BENCH_BIN" ]] || { echo "错误: 找不到 $SYCL_BENCH_BIN (需先编译 build-sycl)" >&2; return 1; }
     sycl_env "$SYCL_BENCH_BIN"
-    echo "== [3/5] SYCL layer split (build-sycl) =="
+    echo "== [3/6] SYCL layer split (build-sycl) =="
     "$SYCL_BENCH_BIN" --split-mode layer "${BENCH_ARGS[@]}"
 }
 
 run_sycl_tensor() {
     [[ -x "$SYCL_BENCH_BIN" ]] || { echo "错误: 找不到 $SYCL_BENCH_BIN (需先编译 build-sycl)" >&2; return 1; }
     sycl_env "$SYCL_BENCH_BIN"
-    echo "== [4/5] SYCL tensor split (build-sycl) =="
+    echo "== [4/6] SYCL tensor split (build-sycl) =="
     "$SYCL_BENCH_BIN" --split-mode tensor "${BENCH_ARGS[@]}"
 }
 
@@ -85,7 +85,7 @@ run_sycl_mtp() {
     [[ -x "$SYCL_CLI_BIN" ]] || { echo "错误: 找不到 $SYCL_CLI_BIN (先编译: ./build_sycl.sh)" >&2; return 1; }
     [[ -f "$DRAFT_MODEL" ]] || { echo "错误: 找不到 MTP draft 模型 $DRAFT_MODEL" >&2; return 1; }
     sycl_env "$SYCL_CLI_BIN"
-    echo "== [5/5] SYCL + MTP 投机解码 (llama-cli, draft-n-max $DRAFT_N_MAX) =="
+    echo "== [5/6] SYCL layer split + MTP 投机解码 (llama-cli, draft-n-max $DRAFT_N_MAX) =="
     echo "draft: $(basename "$DRAFT_MODEL") | prompt: ${#PROMPT} 字符"
     "$SYCL_CLI_BIN" -m "$MODEL" -md "$DRAFT_MODEL" \
         --spec-type draft-mtp \
@@ -93,6 +93,33 @@ run_sycl_mtp() {
         --cache-type-k-draft "$KV_TYPE" \
         --cache-type-v-draft "$KV_TYPE" \
         --split-mode layer \
+        -ngl "$NGL" -ngld 999 \
+        -devd "$MTP_DEVICE" \
+        -ts "$MAIN_TS" \
+        --cache-type-k "$KV_TYPE" --cache-type-v "$KV_TYPE" \
+        --flash-attn "$FA" \
+        --batch-size "$BS" \
+        --ubatch-size "$UBS" \
+        -c "$MTP_CTX" -p "$PROMPT" -n 512 \
+        --temp 1.0 --top-k 20 --top-p 0.95 --min-p 0.0 \
+        --presence-penalty 0.0 --repeat-penalty 1.0 \
+        --reasoning-budget 4096 \
+        --reasoning-effort "$REASONING_EFFORT" \
+        >/dev/null
+}
+
+run_sycl_tensor_mtp() {
+    [[ -x "$SYCL_CLI_BIN" ]] || { echo "错误: 找不到 $SYCL_CLI_BIN (先编译: ./build_sycl.sh)" >&2; return 1; }
+    [[ -f "$DRAFT_MODEL" ]] || { echo "错误: 找不到 MTP draft 模型 $DRAFT_MODEL" >&2; return 1; }
+    sycl_env "$SYCL_CLI_BIN"
+    echo "== [6/6] SYCL tensor split + MTP 投机解码 (llama-cli, draft-n-max $DRAFT_N_MAX) =="
+    echo "draft: $(basename "$DRAFT_MODEL") | prompt: ${#PROMPT} 字符"
+    "$SYCL_CLI_BIN" -m "$MODEL" -md "$DRAFT_MODEL" \
+        --spec-type draft-mtp \
+        --spec-draft-n-max "$DRAFT_N_MAX" \
+        --cache-type-k-draft "$KV_TYPE" \
+        --cache-type-v-draft "$KV_TYPE" \
+        --split-mode tensor \
         -ngl "$NGL" -ngld 999 \
         -devd "$MTP_DEVICE" \
         -ts "$MAIN_TS" \
@@ -116,14 +143,15 @@ show_devices() {
 
 usage() {
     cat <<'EOF'
-用法: ./bench.sh [all|vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|devices]
+用法: ./bench.sh [all|vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp|devices]
 
-  all              串行跑全部五种配置 (默认, 结果与结论见 README.md)
+  all              串行跑全部六种配置 (默认, 结果与结论见 README.md)
   vulkan-official  官方预编译 llama (~/.local/bin/llama)
   vulkan           自编译 Vulkan (build-vulkan)
   sycl             SYCL layer split (build-sycl)
   sycl-tensor      SYCL tensor split (build-sycl)
-  sycl-mtp         SYCL + MTP 投机解码 (llama-cli + draft 模型)
+  sycl-mtp         SYCL layer split + MTP 投机解码 (llama-cli + draft 模型)
+  sycl-tensor-mtp  SYCL tensor split + MTP 投机解码 (llama-cli + draft 模型)
   devices          列出 llama.cpp 可见设备
 EOF
 }
@@ -134,13 +162,15 @@ case "${1:-all}" in
         run_vulkan          || true; sleep 8
         run_sycl            || true; sleep 8
         run_sycl_tensor     || true; sleep 8
-        run_sycl_mtp        || true
+        run_sycl_mtp        || true; sleep 8
+        run_sycl_tensor_mtp || true
         ;;
     vulkan-official) run_vulkan_official ;;
     vulkan)          run_vulkan ;;
     sycl)            run_sycl ;;
     sycl-tensor)     run_sycl_tensor ;;
     sycl-mtp)        run_sycl_mtp ;;
+    sycl-tensor-mtp) run_sycl_tensor_mtp ;;
     devices)         show_devices ;;
     -h|--help|help) usage ;;
     *)       usage >&2; err "未知参数 '$1'" ;;
