@@ -4,10 +4,10 @@ SHELL := /bin/bash
 .PHONY: help build bench start devices driver-status driver-xe driver-i915
 
 help:
-	@echo "make build               编译 SYCL + Vulkan 后端"
+	@echo "make build               编译 SYCL 后端; Vulkan 对照: ./build_vulkan.sh"
 	@echo "make bench [配置]        跑基准; 不带参数跑全部"
-	@echo "                         配置: vulkan-official vulkan sycl sycl-tensor sycl-mtp"
-	@echo "make start [模式]        启动 llama-server; 模式: mtp (默认) base"
+	@echo "                         配置: vulkan-official vulkan sycl sycl-tensor sycl-mtp sycl-tensor-mtp"
+	@echo "make start [档位]        启动 llama-server; 思考档位: low (默认) medium high"
 	@echo "make devices             列出 llama.cpp 可见设备"
 	@echo "make driver-status       查看 A770 当前内核驱动"
 	@echo "make driver-xe           切到 xe 驱动 (重启生效)"
@@ -15,7 +15,7 @@ help:
 
 build:
 	./build_sycl.sh
-	./build_vulkan.sh
+# 	./build_vulkan.sh
 
 bench:
 	./bench.sh $(filter-out $@,$(MAKECMDGOALS))
@@ -35,6 +35,6 @@ driver-xe:
 driver-i915:
 	./gpu_driver.sh i915
 
-# make bench sycl / make start base 的位置参数在此吞掉
+# make bench sycl / make start high 的位置参数在此吞掉
 %:
 	@:
