@@ -4,11 +4,7 @@
 
 家人们，用你发财的小手点一点右上角的星星⭐吧
 
-如无意外，本项目的配置是运行速度、输出质量与 context 长度的最佳平衡；若后续无大变更，则不再继续测试。
-
-- 运行速度：SYCL layer split prefill 490.21 t/s (pp5120)，decode 14.19 t/s (tg256)；MTP 投机解码 200k context 实测 prompt 204.0 / generation 23.2 t/s
-- 输出质量：q8_0 KV cache，相比 f16 KV 的质量损失可忽略
-- context 长度：200k token，够一到两个小任务跑完整上下文
+如无意外，本项目的 start 配置是运行速度、输出质量与 context 长度的最佳平衡；若后续无大变更，则不再继续测试。
 
 ## 目录
 
@@ -27,14 +23,14 @@
 | 项目 | 值 |
 |---|---|
 | 操作系统 | Fedora Linux 44 (KDE Plasma Desktop Edition) |
-| 内核 | 7.1.13-200.fc44.x86_64 |
+| 内核 | 7.2.11-200.fc44.x86_64 |
 | CPU | AMD Ryzen 9 5900X, 12C/24T |
 | 内存 | 15 GiB |
 | GPU 1 | Intel Arc A770 16GB (DG2) — level_zero:0 / Vulkan1 |
 | GPU 2 | Intel Arc A770 16GB (DG2) — level_zero:1 / Vulkan2 |
 | GPU 3 (显示) | NVIDIA GeForce GT 1030 2GB — Vulkan0 |
 | 拆分卡 | Intel PCIe switch (4fa0)，两张 A770 链路 PCIe 3.0 x8 |
-| 显卡驱动 | intel-level-zero 26.22.38646, intel-opencl 26.22.38646, vulkan-loader 1.4.341, mesa 26.1.6 |
+| 显卡驱动 | intel-level-zero 26.35.39758, intel-opencl 26.35.39758, vulkan-loader 1.4.341, mesa 26.2.4 |
 | 内核驱动 | xe (`xe.force_probe=56a0`)，两张 A770 |
 
 ---
@@ -43,10 +39,10 @@
 
 | 组件 | 版本 | 备注 |
 |---|---|---|
-| llama.cpp 源码 | commit `b23701f` (master, 2026-09-20) | `git clone --depth 1` |
+| llama.cpp 源码 | commit `1ae3092` (master + 3 本地 SYCL commit, 2026-10-19) | |
 | 官方预编译 | build 11046 (`60081bb2b`)，`~/.local/bin/llama` | Vulkan 对照基准 |
-| 自编译 SYCL 版 | `b23701f`, build 457, `build-sycl/bin/` | `-DGGML_SYCL=ON -DGGML_SYCL_F16=ON` |
-| 自编译 Vulkan 版 | `b23701f`, build 457, `build-vulkan/bin/` | `-DGGML_VULKAN=ON`，系统 GCC |
+| 自编译 SYCL 版 | `1ae3092`, build 1148, `build-sycl/bin/` | `-DGGML_SYCL=ON -DGGML_SYCL_F16=ON` |
+| 自编译 Vulkan 版 | `1ae3092`, build 1148, `build-vulkan/bin/` | `-DGGML_VULKAN=ON`，系统 GCC |
 | Intel oneAPI | 2026.1.1 (2026.1.1.20260724) | `intel-oneapi-toolkit` via yum |
 | DPC++ 编译器 | icpx 2026.1.1 | 编译 SYCL 后端 |
 | 模型 | Qwen3.8-27B-UD-Q4_K_M.gguf, 15.32 GiB, 27.32 B params | unsloth GGUF |
@@ -58,12 +54,13 @@
 | 配置 | 二进制 (build) | Split 模式 | 设备选择 |
 |---|---|---|---|
 | vulkan-official | `~/.local/bin/llama` (11046) | layer | `--device Vulkan1,Vulkan2` |
-| vulkan | `build-vulkan/bin/llama-bench` (b23701f) | layer | `--device Vulkan1,Vulkan2` |
-| sycl | `build-sycl/bin/llama-bench` (b23701f) | layer | `ONEAPI_DEVICE_SELECTOR=level_zero:0;1` |
-| sycl-tensor | `build-sycl/bin/llama-bench` (b23701f) | tensor | `ONEAPI_DEVICE_SELECTOR=level_zero:0;1` |
-| sycl-mtp | `build-sycl/bin/llama-cli` (b23701f) + MTP draft | layer | draft 固定 `SYCL0`，主模型 `-ts 0.47,0.53` |
+| vulkan | `build-vulkan/bin/llama-bench` (1ae3092) | layer | `--device Vulkan1,Vulkan2` |
+| sycl | `build-sycl/bin/llama-bench` (1ae3092) | layer | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
+| sycl-tensor | `build-sycl/bin/llama-bench` (1ae3092) | tensor | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
+| sycl-mtp | `build-sycl/bin/llama-cli` (1ae3092) + MTP draft | layer | draft 固定 `SYCL0`，主模型 `-ts 0.47,0.53` |
+| sycl-tensor-mtp | `build-sycl/bin/llama-cli` (1ae3092) + MTP draft | tensor | draft 固定 `SYCL0`，主模型 `-ts 0.47,0.53` |
 
-SYCL 与 Vulkan 均编自同一 commit（`b23701f`）。
+SYCL 与 Vulkan 均编自同一 commit（`1ae3092`）。
 
 ---
 
@@ -73,10 +70,10 @@ SYCL 与 Vulkan 均编自同一 commit（`b23701f`）。
 
 ```sh
 llama-bench -m <model> -ngl 999 --cache-type-k q8_0 --cache-type-v q8_0 \
-  --flash-attn on --batch-size 2048 --ubatch-size 1024 -p 5120 -n 128 -r 3
+  --flash-attn on --batch-size 2048 --ubatch-size 1024 -p 5120 -n 256 -r 3
 ```
 
-llama-bench 不支持投机参数，sycl-mtp 改用 llama-cli 测，采样参数与 start 脚本一致，见 [5.5](#55-sycl--mtp-投机解码)。
+llama-bench 不支持投机参数，sycl-mtp 与 sycl-tensor-mtp 改用 llama-cli 测，采样参数与 start 脚本一致，见 [5.5](#55-sycl--mtp-投机解码)。
 
 ---
 
@@ -85,10 +82,10 @@ llama-bench 不支持投机参数，sycl-mtp 改用 llama-cli 测，采样参数
 ### 5.1 Vulkan 官方预编译（按卡分行）
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa | dev     |   test |            t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | --: | ------- | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 | pp5120 | 109.19 ± 0.24 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 |  tg128 |  11.05 ± 0.00 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 | pp5120 | 112.86 ± 1.26 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 |  tg128 |  10.88 ± 0.06 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 | pp5120 |  73.87 ± 4.57 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 |  tg256 |   8.77 ± 0.44 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 | pp5120 |  76.79 ± 3.76 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 |  tg256 |   8.75 ± 0.46 |
 
 ### 5.2 Vulkan 自编译（按卡分行）
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa | dev     |   test |            t/s |
@@ -101,28 +98,25 @@ llama-bench 不支持投机参数，sycl-mtp 改用 llama-cli 测，采样参数
 ### 5.3 SYCL 逐层切分（双卡合并）
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa | dev  |   test |            t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | --: | ---- | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 | pp5120 | 575.77 ± 0.13 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 |  tg128 |  14.21 ± 0.00 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 | pp5120 | 543.09 ± 2.04 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | 双卡 |  tg256 |  14.44 ± 0.01 |
 
 ### 5.4 SYCL 张量并行（双卡合并，链路 PCIe 3.0 x8）
-| model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |     sm |  fa | dev  |   test |           t/s |
-| ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | -----: | --: | ---- | -----: | ------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | 双卡 | pp5120 | 48.34 ± 0.01 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | 双卡 |  tg128 | 10.86 ± 0.00 |
+| model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |     sm |  fa | dev  |   test |            t/s |
+| ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | -----: | --: | ---- | -----: | -------------: |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | 双卡 | pp5120 | 589.45 ± 0.46 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | 双卡 |  tg256 |  16.16 ± 0.59 |
 
 ### 5.5 SYCL + MTP 投机解码
 
-draft 模型：官方 Qwen3.8-27B MTP 模块（`mtp-Qwen3.8-27B-Q4_0.gguf`，1.3 GiB），固定 GPU 0；主模型按 0.47/0.53 切分；`--spec-draft-n-max 3`。prompt：中文推理题（533 字符，约 400 token）；ctx 180k；`--reasoning-effort medium`；连跑五次。
+draft 模型：官方 Qwen3.8-27B MTP 模块（`mtp-Qwen3.8-27B-Q4_0.gguf`，1.3 GiB），固定 GPU 0；主模型按 0.47/0.53 切分；`--spec-draft-n-max 3`。prompt：中文推理题（533 字符，约 400 token）；ctx 200k；`--reasoning-effort medium`；每种 split 各跑一次。
 
-| 轮次 | prompt t/s | generation t/s |
+| split | prompt t/s | generation t/s |
 | --- | --: | --: |
-| 1 | 207.0 | 25.0 |
-| 2 | 201.9 | 23.7 |
-| 3 | 171.8 | 23.5 |
-| 4 | 206.2 | 27.0 |
-| 5 | 206.9 | 26.2 |
+| layer | 160.9 | 25.4 |
+| tensor | 159.6 | 30.4 |
 
-测试入口: `make bench sycl-mtp`
+测试入口: `make bench sycl-mtp` / `make bench sycl-tensor-mtp`
 
 ---
 
@@ -130,23 +124,24 @@ draft 模型：官方 Qwen3.8-27B MTP 模块（`mtp-Qwen3.8-27B-Q4_0.gguf`，1.3
 
 ```sh
 make                     # 列出全部命令
-make build               # 编译两个后端 (SYCL + Vulkan)
-make bench               # 串行运行全部五种配置
-make bench sycl          # 指定配置: vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp
-make start               # 默认 mtp: MTP 投机解码, ctx 180k; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
-make start base          # 关闭投机: 单份 KV, ctx 180k
+make build               # 编译 SYCL 后端 (Vulkan 对照: ./build_vulkan.sh)
+make bench               # 串行运行全部六种配置
+make bench sycl          # 指定配置: vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp
+make start               # 档位 low (默认); MTP 投机解码; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
+make start high          # 思考档位: low (默认) | medium | high
 make devices             # 列出 llama.cpp 可见设备
 curl http://127.0.0.1:8080/v1/chat/completions
 ```
 
-两种启动模式:
+三种思考档位; MTP 投机解码常开:
 
-| 模式 | ctx | KV | decode 速度 |
-|---|---|---|---|
-| `mtp`（默认） | 180000 | 主 + draft 双份 | 约 1.8 倍于 `base`（见 [5.5](#55-sycl--mtp-投机解码)） |
-| `base` | 180000 | 单份 | SYCL layer split 基线 (14.21 t/s) |
+| 档位 | `--reasoning-effort` | 思考 |
+|---|---|---|
+| `low`（默认） | `low` | 简短 |
+| `medium` | `medium` | 均衡 |
+| `high` | `high` → `xhigh` | 最深 |
 
-> MTP 模式将 draft 模型固定在 GPU 0，主模型按 0.47/0.53 切分；KV 类型 q8_0，batch 2048，ubatch 1024。
+> MTP 将 draft 模型固定在 GPU 0，主模型按 0.48/0.52 切分；KV 类型 q8_0，batch 2048，ubatch 1024。
 
 ### GPU 驱动切换 i915 / xe
 
@@ -161,7 +156,7 @@ make driver-i915         # 切回 i915 (重启生效)
 ### 编译
 
 ```sh
-make build                # 编译两个后端
+make build                # 编译 SYCL 后端
                           # SYCL 依赖: oneAPI 及 Level Zero 头文件
                           #   sudo dnf install intel-oneapi-toolkit oneapi-level-zero-devel
                           # Vulkan 依赖: vulkan-headers glslc spirv-headers-devel vulkan-loader-devel
