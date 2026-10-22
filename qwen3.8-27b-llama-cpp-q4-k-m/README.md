@@ -39,10 +39,9 @@ Barring surprises, the configuration in this repo is the best balance of runtime
 
 | Component | Version | Note |
 |---|---|---|
-| Source | commit `1ae3092` (master + 3 local SYCL commits, 2026-10-19) | |
-| Official Prebuilt | build 11046 (`60081bb2b`), `~/.local/bin/llama` | Vulkan baseline |
-| Self-Built SYCL | `1ae3092`, build 1148, `build-sycl/bin/` | `-DGGML_SYCL=ON -DGGML_SYCL_F16=ON` |
-| Self-Built Vulkan | `1ae3092`, build 1148, `build-vulkan/bin/` | `-DGGML_VULKAN=ON`, system GCC |
+| Source | commit `5f5acfe2` (upstream master, 2026-10-22) | |
+| Self-Built SYCL | `5f5acfe2`, build 1227, `build-sycl/bin/` | `-DGGML_SYCL=ON -DGGML_SYCL_F16=ON` |
+| Self-Built Vulkan | `5f5acfe2`, build 1227, `build-vulkan/bin/` | `-DGGML_VULKAN=ON`, system GCC |
 | Intel oneAPI | 2026.1.1 (2026.1.1.20260724) | `intel-oneapi-toolkit` via yum |
 | Compiler | icpx 2026.1.1 | builds SYCL backend |
 | Model | Qwen3.8-27B-UD-Q4_K_M.gguf, 15.32 GiB, 27.32 B params | unsloth GGUF |
@@ -53,14 +52,13 @@ Barring surprises, the configuration in this repo is the best balance of runtime
 
 | Config | Binary (build) | Split Mode | Device Select |
 |---|---|---|---|
-| vulkan-official | `~/.local/bin/llama` (11046) | layer | `--device Vulkan1,Vulkan2` |
-| vulkan | `build-vulkan/bin/llama-bench` (1ae3092) | layer | `--device Vulkan1,Vulkan2` |
-| sycl | `build-sycl/bin/llama-bench` (1ae3092) | layer | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
-| sycl-tensor | `build-sycl/bin/llama-bench` (1ae3092) | tensor | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
-| sycl-mtp | `build-sycl/bin/llama-cli` (1ae3092) + MTP draft | layer | draft on `SYCL0`, main model `-ts 0.47,0.53` |
-| sycl-tensor-mtp | `build-sycl/bin/llama-cli` (1ae3092) + MTP draft | tensor | draft on `SYCL0`, main model `-ts 0.47,0.53` |
+| vulkan | `build-vulkan/bin/llama-bench` (5f5acfe2) | layer | `--device Vulkan1,Vulkan2` |
+| sycl | `build-sycl/bin/llama-bench` (5f5acfe2) | layer | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
+| sycl-tensor | `build-sycl/bin/llama-bench` (5f5acfe2) | tensor | `ONEAPI_DEVICE_SELECTOR=level_zero:0;level_zero:1` |
+| sycl-mtp | `build-sycl/bin/llama-cli` (5f5acfe2) + MTP draft | layer | draft on `SYCL0`, main model `-ts 0.48,0.52` |
+| sycl-tensor-mtp | `build-sycl/bin/llama-cli` (5f5acfe2) + MTP draft | tensor | draft on `SYCL0`, main model `-ts 0.48,0.52` |
 
-SYCL and Vulkan are built from the same commit (`1ae3092`).
+SYCL and Vulkan are built from the same commit (`5f5acfe2`).
 
 ---
 
@@ -70,51 +68,43 @@ All configs share identical settings; each row is the average of 3 repeats. Vulk
 
 ```sh
 llama-bench -m <model> -ngl 999 --cache-type-k q8_0 --cache-type-v q8_0 \
-  --flash-attn on --batch-size 2048 --ubatch-size 1024 -p 5120 -n 256 -r 3
+  --flash-attn on --batch-size 2048 --ubatch-size 1024 -p 2048 -n 128 -r 3
 ```
 
-llama-bench has no speculative-decoding flags, so sycl-mtp and sycl-tensor-mtp are measured with llama-cli instead, with sampling parameters identical to the start script; see [5.5](#55-sycl--mtp-speculative-decoding).
+llama-bench has no speculative-decoding flags, so sycl-mtp and sycl-tensor-mtp are measured with llama-cli instead, with sampling parameters identical to the start script; see [5.4](#54-sycl--mtp-speculative-decoding).
 
 ---
 
 ## 5. Results
 
-### 5.1 Official Prebuilt Vulkan, per-GPU shard
+### 5.1 Self-Built Vulkan, per-GPU shard
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa | dev     |   test |            t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | --: | ------- | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 | pp5120 |  73.87 ± 4.57 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 |  tg256 |   8.77 ± 0.44 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 | pp5120 |  76.79 ± 3.76 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 |  tg256 |   8.75 ± 0.46 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 | pp2048 | 180.08 ± 20.57 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 |  tg128 |   7.93 ± 0.29 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 | pp2048 | 173.75 ± 26.41 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 |  tg128 |   7.97 ± 0.41 |
 
-### 5.2 Self-Built Vulkan, per-GPU shard
-| model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa | dev     |   test |            t/s |
-| ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | --: | ------- | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 | pp5120 | 109.13 ± 0.25 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan1 |  tg128 |  11.06 ± 0.00 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 | pp5120 | 112.91 ± 1.27 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | Vulkan  | 999 |     1024 |   q8_0 |   q8_0 |   1 | Vulkan2 |  tg128 |  10.89 ± 0.06 |
-
-### 5.3 SYCL layer split, dual-GPU combined
+### 5.2 SYCL layer split, dual-GPU combined
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |  fa |    dev |   test |            t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | --: | -----: | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     | pp5120 | 543.09 ± 2.04 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     |  tg256 |  14.44 ± 0.01 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     | pp2048 | 608.06 ± 1.03 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 |   1 | both     |  tg128 |  15.68 ± 0.01 |
 
-### 5.4 SYCL tensor split, dual-GPU combined (PCIe 3.0 x8 link)
+### 5.3 SYCL tensor split, dual-GPU combined (PCIe 3.0 x8 link)
 | model                    |       size |     params | backend | ngl | n_ubatch | type_k | type_v |     sm |  fa |    dev |   test |            t/s |
 | ------------------------ | ---------: | ---------: | ------- | --: | -------: | -----: | -----: | -----: | --: | -----: | -----: | -------------: |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | both     | pp5120 | 589.45 ± 0.46 |
-| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | both     |  tg256 |  16.16 ± 0.59 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | both     | pp2048 | 585.48 ± 1.53 |
+| qwen35 27B Q4_K - Medium |  15.32 GiB |    27.32 B | SYCL    | 999 |     1024 |   q8_0 |   q8_0 | tensor |   1 | both     |  tg128 |  19.28 ± 0.12 |
 
-### 5.5 SYCL + MTP speculative decoding
+### 5.4 SYCL + MTP speculative decoding
 
-Draft model: official Qwen3.8-27B MTP module (`mtp-Qwen3.8-27B-Q4_0.gguf`, 1.3 GiB), pinned to GPU 0; main model split 0.47/0.53; `--spec-draft-n-max 3`. Prompt: Chinese reasoning question (533 chars, ~400 tokens); ctx 200k; `--reasoning-effort medium`; one run per split mode.
+Draft model: official Qwen3.8-27B MTP module (`mtp-Qwen3.8-27B-Q4_0.gguf`, 1.3 GiB), pinned to GPU 0; main model split 0.48/0.52; `--spec-draft-n-max 3`. Prompt: Chinese reasoning question (533 chars, ~400 tokens); ctx 200k; `--reasoning-effort medium`; one run per split mode.
 
 | split | prompt t/s | generation t/s |
 | --- | --: | --: |
-| layer | 160.9 | 25.4 |
-| tensor | 159.6 | 30.4 |
+| layer | 87.0 | 26.6 |
+| tensor | 173.7 | 32.4 |
 
 Entry point: `make bench sycl-mtp` / `make bench sycl-tensor-mtp`
 
@@ -124,9 +114,10 @@ Entry point: `make bench sycl-mtp` / `make bench sycl-tensor-mtp`
 
 ```sh
 make                     # list all commands
-make build               # build SYCL backend (Vulkan baseline: ./build_vulkan.sh)
-make bench               # run all six configs sequentially
-make bench sycl          # a single config: vulkan-official|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp
+make build sycl          # build SYCL backend
+make build vulkan        # build Vulkan baseline
+make bench               # run all five configs sequentially
+make bench sycl          # a single config: vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp
 make start               # effort low (default); MTP speculative decoding; llama-server, OpenAI-compatible API, 127.0.0.1:8080
 make start high          # effort levels: low (default) | medium | high
 make devices             # list devices visible to llama.cpp
@@ -156,7 +147,8 @@ make driver-i915         # switch back to i915 (reboot)
 ### Build
 
 ```sh
-make build                # build SYCL backend
+make build sycl           # build SYCL backend
+make build vulkan         # build Vulkan baseline
                           # SYCL deps: oneAPI and the Level Zero headers
                           #   sudo dnf install intel-oneapi-toolkit oneapi-level-zero-devel
                           # Vulkan deps: vulkan-headers glslc spirv-headers-devel vulkan-loader-devel
@@ -174,3 +166,5 @@ Numbers from the earlier rounds, kept for the record.
 | 2026-09-05 | prompt extended to pp5120, `--ubatch-size` swept | 432.73 / 570.16 / 637.37 t/s at ubatch 512 / 1024 / 2048 |
 | 2026-09-05 | MTP `--spec-draft-n-max` swept | 9.6 t/s without speculation; 11.3 / 12.8 / 14.2 / 14.0 at draft length 1 / 2 / 3 / 4 |
 | 2026-09-17 | kernel driver i915 → xe | SYCL layer tg128 9.76 → 13.90; MTP draft length 3 14.2 → 19.6 (18.7 / 23.1 / 15.8 / 20.6 over four runs) |
+| 2026-10-19 | recompiled on `1ae3092` (b1148, master + 3 local SYCL commits) | official prebuilt Vulkan pp5120 73.87 & 76.79 / tg256 8.77 & 8.75; self-built Vulkan pp5120 109.13 & 112.91 / tg128 11.06 & 10.89; SYCL layer pp5120 543.09 / tg256 14.44; tensor pp5120 589.45 / tg256 16.16; MTP layer 160.9 / 25.4, tensor 159.6 / 30.4 |
+| 2026-10-22 | recompiled on `5f5acfe2` (b1227, upstream master); bench moved to pp2048/tg128, official prebuilt dropped from bench | Vulkan pp2048 180.08 & 173.75 / tg128 7.93 & 7.97; SYCL layer pp2048 608.06 / tg128 15.68; tensor pp2048 585.48 / tg128 19.28; MTP layer 87.0 / 26.6, tensor 173.7 / 32.4 |
