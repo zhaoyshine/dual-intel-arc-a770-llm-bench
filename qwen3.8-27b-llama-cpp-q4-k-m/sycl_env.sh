@@ -16,6 +16,7 @@ sycl_env() {
     libs+=":$(dirname "$hwloc_lib")"
 
     export ONEAPI_DEVICE_SELECTOR="level_zero:0;level_zero:1"
+    export SYCL_UR_USE_LEVEL_ZERO_V2=1
     export ZES_ENABLE_SYSMAN=1    # 查显存余量
     export LD_LIBRARY_PATH="$libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 }
