@@ -1,0 +1,419 @@
+diff --git a/ggml/src/ggml-sycl/convert.cpp b/ggml/src/ggml-sycl/convert.cpp
+index 02b287e..7f9a230 100644
+--- a/ggml/src/ggml-sycl/convert.cpp
++++ b/ggml/src/ggml-sycl/convert.cpp
+@@ -475,6 +475,21 @@ static void dequantize_row_iq3_s_sycl_reorder(const void * vx, dst_t * y, const
+         });
+ }
+ 
++template <typename dst_t>
++static void dequantize_row_iq4_xs_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
++                                               dpct::queue_ptr stream) {
++    const int64_t nb = (k + QK_K - 1) / QK_K;
++    dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
++
++    stream->submit([&](sycl::handler & cgh) {
++        cgh.parallel_for(
++            sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
++            [=](sycl::nd_item<3> item_ct1) {
++                dequantize_block_iq4_xs_reorder(vx, y, nb, item_ct1);
++            });
++    });
++}
++
+ template <typename dst_t>
+ static void dequantize_row_iq4_xs_sycl(const void *vx, dst_t *y, const int64_t k,
+                                        dpct::queue_ptr stream) {
+@@ -746,6 +761,9 @@ static to_t_sycl_t<dst_t> ggml_get_dequant_sycl(ggml_type type, ggml_tensor * ds
+                 return dequantize_row_iq3_s_sycl;
+             }
+         case GGML_TYPE_IQ4_XS:
++            if (is_reordered_src0(dst)) {
++                return dequantize_row_iq4_xs_sycl_reorder;
++            }
+             return dequantize_row_iq4_xs_sycl;
+         case GGML_TYPE_IQ4_NL:
+             return dequantize_row_iq4_nl_sycl;
+diff --git a/ggml/src/ggml-sycl/dequantize.hpp b/ggml/src/ggml-sycl/dequantize.hpp
+index ae709ef..f6a946b 100644
+--- a/ggml/src/ggml-sycl/dequantize.hpp
++++ b/ggml/src/ggml-sycl/dequantize.hpp
+@@ -1718,6 +1718,32 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
+     }
+ }
+ 
++// Same math as dequantize_block_iq4_xs, but reading the reordered SoA layout:
++// qs is contiguous per block and the header (d, scales_h, scales_l) lives in a trailing array.
++template<typename dst_t>
++static void dequantize_block_iq4_xs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t nblocks,
++                                            const sycl::nd_item<3> & item_ct1) {
++    const int64_t i = item_ct1.get_group(2);
++
++    const uint8_t * base = (const uint8_t *) vx;
++    const uint8_t * qs   = base + i * (QK_K / 2);
++    const uint8_t * meta = base + nblocks * (QK_K / 2) + i * (sizeof(block_iq4_xs) - QK_K / 2);
++
++    const int64_t tid = item_ct1.get_local_id(2);
++    const int64_t il  = tid / 8;  // 0...3
++    const int64_t ib  = tid % 8;  // 0...7
++    dst_t * y = yy + i * QK_K + 32 * ib + 4 * il;
++    const uint8_t * q4 = qs + 16 * ib + 4 * il;
++    const int       ls = ((meta[4 + ib / 2] >> 4 * (ib % 2)) & 0xf) |
++                         (((*(const uint16_t *) (meta + 2) >> 2 * ib) & 3) << 4);
++    const float d = (float) (*(const ggml_half *) meta) * (ls - 32);
++#pragma unroll
++    for (int j = 0; j < 4; ++j) {
++        y[j + 0]  = d * kvalues_iq4nl[q4[j] & 0xf];
++        y[j + 16] = d * kvalues_iq4nl[q4[j] >> 4];
++    }
++}
++
+ template<typename dst_t>
+ static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                    const sycl::nd_item<3> &item_ct1) {
+diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+index 97ad492..274187c 100644
+--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+@@ -812,6 +812,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
+             case GGML_TYPE_Q6_K:
+             case GGML_TYPE_IQ3_XXS:
+             case GGML_TYPE_IQ3_S:
++            case GGML_TYPE_IQ4_XS:
+             case GGML_TYPE_MXFP4:{
+                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+                 tensor->extra                 = extra;
+@@ -4381,6 +4382,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
+         case GGML_TYPE_Q6_K:
+         case GGML_TYPE_IQ3_XXS:
+         case GGML_TYPE_IQ3_S:
++        case GGML_TYPE_IQ4_XS:
+             return true;
+         default:
+             return false;
+@@ -4990,6 +4992,18 @@ static bool reorder_qw_iq3_xxs(uint8_t * data_device, size_t size, dpct::queue_p
+         }, stream);
+ }
+ 
++static bool reorder_qw_iq4_xs(uint8_t * data_device, size_t size, dpct::queue_ptr stream) {
++    return reorder_qw_planar<block_iq4_xs>(__func__, data_device, size, offsetof(block_iq4_xs, qs), QK_K / 2,
++        [](const block_iq4_xs & x, int64_t ib, uint8_t * tail, int64_t) {
++            uint8_t * meta = tail + ib * (sizeof(block_iq4_xs) - QK_K / 2);
++            reinterpret_cast<ggml_half *>(meta)[0] = x.d;
++            reinterpret_cast<uint16_t *>(meta + sizeof(ggml_half))[0] = x.scales_h;
++            for (int j = 0; j < QK_K / 64; ++j) {
++                meta[sizeof(ggml_half) + sizeof(uint16_t) + j] = x.scales_l[j];
++            }
++        }, stream);
++}
++
+ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
+     uint8_t * data_device = (uint8_t *) src0->data;
+     size_t ncols = src0->ne[0];
+@@ -5035,6 +5049,8 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
+             return reorder_qw_iq3_xxs(data_device, size, stream);
+         case GGML_TYPE_IQ3_S:
+             return reorder_qw_iq3_s(data_device, size, stream);
++        case GGML_TYPE_IQ4_XS:
++            return reorder_qw_iq4_xs(data_device, size, stream);
+         default:
+             return false;
+     }
+@@ -5409,9 +5425,10 @@ static bool ggml_sycl_mul_mat_glu_fused(ggml_backend_sycl_context & ctx, ggml_cg
+     }
+ 
+     // quant pairs the reorder kernel does not serve (mixed gate/up types, q5_K off BMG) take the
+-    // standard-layout fused path instead; same-type q4_K / q5_K keep the reorder path below
++    // standard-layout fused path instead; same-type q4_K / iq4_xs / q5_K keep the reorder path below
+     const bool reorder_pair = wg->type == wu->type &&
+-        (wu->type == GGML_TYPE_Q4_K || (wu->type == GGML_TYPE_Q5_K && ggml_sycl_q5_k_mmvq_reuse(ctx.device)));
++        (wu->type == GGML_TYPE_Q4_K || wu->type == GGML_TYPE_IQ4_XS ||
++         (wu->type == GGML_TYPE_Q5_K && ggml_sycl_q5_k_mmvq_reuse(ctx.device)));
+     if (!reorder_pair) {
+         const auto is_plain_type = [](ggml_type type) {
+             return type == GGML_TYPE_Q5_K || type == GGML_TYPE_IQ4_XS;
+diff --git a/ggml/src/ggml-sycl/mmvq.cpp b/ggml/src/ggml-sycl/mmvq.cpp
+index c385381..30a2fec 100644
+--- a/ggml/src/ggml-sycl/mmvq.cpp
++++ b/ggml/src/ggml-sycl/mmvq.cpp
+@@ -2203,6 +2203,63 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
+ #endif // GGML_SYCL_MMVQ_HAS_XMX
+ }
+ 
++static void reorder_mul_mat_vec_iq4_xs_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
++                                                 const int nrows, dpct::queue_ptr stream) {
++    GGML_ASSERT(ncols % QK_K == 0);
++    constexpr size_t     num_subgroups = WARP_SIZE;
++    const int            block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups);
++    const sycl::range<3> block_nums(1, 1, block_num_y);
++    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
++
++    stream->submit([&](sycl::handler & cgh) {
++        cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
++                         [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
++                             mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS>>(vx, vy, dst, ncols, nrows,
++                                                                                             nd_item);
++                         });
++    });
++}
++
++template <int ncols_dst>
++static void reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols(
++        const void * vx, const void * vy, float * dst,
++        const int ncols, const int nrows,
++        const int stride_col_y_bytes, const int stride_col_dst,
++        dpct::queue_ptr stream) {
++    GGML_ASSERT(ncols % QK_K == 0);
++    constexpr size_t     num_subgroups = WARP_SIZE;
++    const int            block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups);
++    const sycl::range<3> block_nums(1, 1, block_num_y);
++    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
++
++    stream->submit([&](sycl::handler & cgh) {
++        cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
++                         [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
++                             mul_mat_vec_q_reorder_ncols<reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS>, ncols_dst>(
++                                 vx, /*vgate=*/ nullptr, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst,
++                                 /*glu_op=*/ GGML_GLU_OP_SWIGLU, nd_item);
++                         });
++    });
++}
++
++static void reorder_mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols(
++        const void * vx, const void * vy, float * dst,
++        const int ncols, const int nrows, const int ncols_dst,
++        const int stride_col_y_bytes, const int stride_col_dst,
++        dpct::queue_ptr stream) {
++    switch (ncols_dst) {
++        case 1: reorder_mul_mat_vec_iq4_xs_q8_1_sycl(vx, vy, dst, ncols, nrows, stream); break;
++        case 2: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<2>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 3: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<3>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 4: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<4>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 5: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<5>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 6: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<6>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 7: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<7>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        case 8: reorder_mul_mat_vec_iq4_xs_q8_1_sycl_ncols<8>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream); break;
++        default: GGML_ABORT("unsupported ncols_dst=%d for IQ4_XS reorder multi-col MMVQ", ncols_dst);
++    }
++}
++
+ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                 ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+                                 const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,
+@@ -2564,7 +2621,23 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
+                 mul_mat_vec_iq4_nl_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                 break;
+             case GGML_TYPE_IQ4_XS:
+-                if (i == 0 && src1_ncols > 1 && src1_ncols <= 8) {
++                if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
++                    ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
++                    if (i == 0 && src1_ncols > 1 && src1_ncols <= 8) {
++                        const int stride_col_y_bytes = src1_padded_col_size * q8_1_ts / q8_1_bs;
++                        const int stride_col_dst     = dst->ne[0];
++                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols ncols=%d\n", (int)src1_ncols);
++                        reorder_mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols(
++                            src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff,
++                            src1_ncols, stride_col_y_bytes, stride_col_dst, stream);
++                        return;
++                    } else {
++                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_iq4_xs_q8_1_sycl\n");
++                        reorder_mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols(
++                            src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff,
++                            1, /*stride_col_y_bytes=*/0, /*stride_col_dst=*/0, stream);
++                    }
++                } else if (i == 0 && src1_ncols > 1 && src1_ncols <= 8) {
+                     const int stride_col_y   = src1_padded_col_size / QK8_1;
+                     const int stride_col_dst = dst->ne[0];
+                     GGML_SYCL_DEBUG("Calling mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols ncols=%d\n", (int)src1_ncols);
+@@ -3249,6 +3322,9 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu
+             // fusion declines q5_K past 5 columns
+             return mul_mat_vec_q_glu_reorder_ncols<GGML_TYPE_Q5_K, 1, 2, 3, 4, 5>(
+                 glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes, stride_col_dst, stream);
++        case GGML_TYPE_IQ4_XS:
++            return mul_mat_vec_q_glu_reorder_ncols<GGML_TYPE_IQ4_XS, 1, 2, 3, 4, 5, 6, 7, 8>(
++                glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes, stride_col_dst, stream);
+         default:
+             return false;
+     }
+diff --git a/ggml/src/ggml-sycl/quants.hpp b/ggml/src/ggml-sycl/quants.hpp
+index 9fdcc22..5c5089f 100644
+--- a/ggml/src/ggml-sycl/quants.hpp
++++ b/ggml/src/ggml-sycl/quants.hpp
+@@ -225,6 +225,28 @@ template <> struct block_q_t<GGML_TYPE_IQ3_S> {
+     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+ };
+ 
++template <> struct block_q_t<GGML_TYPE_IQ4_XS> {
++    struct traits {
++        static constexpr uint32_t qk       = QK_K;
++        static constexpr uint32_t qi       = QI4_XS;
++        static constexpr uint32_t qr       = QR4_XS;
++        static constexpr uint32_t vdr_mmvq = 4;
++    };
++
++    // Reordered layout: [qs][{d, scales_h, scales_l} per block]. The 8-byte metadata record stays
++    // packed so the dot product reaches both scale fields from the single d offset.
++    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
++        return { block_index * (QK_K / 2), 0 };
++    }
++
++    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
++        const int nblocks = nrows * (ncols / QK_K);
++        return { nblocks * (QK_K / 2) + block_index * (sizeof(block_iq4_xs) - QK_K / 2), 0 };
++    }
++
++    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
++};
++
+ template <> struct block_q_t<GGML_TYPE_Q8_0> {
+     struct traits {
+         static constexpr uint32_t qk       = QK8_0;      // 32
+diff --git a/ggml/src/ggml-sycl/vecdotq.hpp b/ggml/src/ggml-sycl/vecdotq.hpp
+index f547b20..e915508 100644
+--- a/ggml/src/ggml-sycl/vecdotq.hpp
++++ b/ggml/src/ggml-sycl/vecdotq.hpp
+@@ -13,6 +13,9 @@
+ #ifndef GGML_SYCL_VECDOTQ_HPP
+ #define GGML_SYCL_VECDOTQ_HPP
+ 
++#include <array>
++#include <utility>
++
+ #include "dpct/helper.hpp"
+ #include "ggml.h"
+ #include "type.hpp"
+@@ -1956,4 +1959,134 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
+ #endif
+ }
+ 
++// Two 4-bit codes per lookup: pair[c0 | c1 << 4] = v(c0) | v(c1) << 8, v from kvalues_iq4nl.
++// The scalar table path needs eight indexed byte loads per weight word and is the bottleneck of
++// the IQ4_XS GEMV on Intel GPUs, where there is no byte permute instruction to emulate it with.
++static const uint16_t kvalues_iq4nl_pair[256] = {
++    33153, 33176, 33197, 33215, 33231, 33245, 33258, 33270,
++    33025, 33037, 33049, 33062, 33077, 33093, 33113, 33137,
++    39041, 39064, 39085, 39103, 39119, 39133, 39146, 39158,
++    38913, 38925, 38937, 38950, 38965, 38981, 39001, 39025,
++    44417, 44440, 44461, 44479, 44495, 44509, 44522, 44534,
++    44289, 44301, 44313, 44326, 44341, 44357, 44377, 44401,
++    49025, 49048, 49069, 49087, 49103, 49117, 49130, 49142,
++    48897, 48909, 48921, 48934, 48949, 48965, 48985, 49009,
++    53121, 53144, 53165, 53183, 53199, 53213, 53226, 53238,
++    52993, 53005, 53017, 53030, 53045, 53061, 53081, 53105,
++    56705, 56728, 56749, 56767, 56783, 56797, 56810, 56822,
++    56577, 56589, 56601, 56614, 56629, 56645, 56665, 56689,
++    60033, 60056, 60077, 60095, 60111, 60125, 60138, 60150,
++    59905, 59917, 59929, 59942, 59957, 59973, 59993, 60017,
++    63105, 63128, 63149, 63167, 63183, 63197, 63210, 63222,
++    62977, 62989, 63001, 63014, 63029, 63045, 63065, 63089,
++    385, 408, 429, 447, 463, 477, 490, 502,
++    257, 269, 281, 294, 309, 325, 345, 369,
++    3457, 3480, 3501, 3519, 3535, 3549, 3562, 3574,
++    3329, 3341, 3353, 3366, 3381, 3397, 3417, 3441,
++    6529, 6552, 6573, 6591, 6607, 6621, 6634, 6646,
++    6401, 6413, 6425, 6438, 6453, 6469, 6489, 6513,
++    9857, 9880, 9901, 9919, 9935, 9949, 9962, 9974,
++    9729, 9741, 9753, 9766, 9781, 9797, 9817, 9841,
++    13697, 13720, 13741, 13759, 13775, 13789, 13802, 13814,
++    13569, 13581, 13593, 13606, 13621, 13637, 13657, 13681,
++    17793, 17816, 17837, 17855, 17871, 17885, 17898, 17910,
++    17665, 17677, 17689, 17702, 17717, 17733, 17753, 17777,
++    22913, 22936, 22957, 22975, 22991, 23005, 23018, 23030,
++    22785, 22797, 22809, 22822, 22837, 22853, 22873, 22897,
++    29057, 29080, 29101, 29119, 29135, 29149, 29162, 29174,
++    28929, 28941, 28953, 28966, 28981, 28997, 29017, 29041
++};
++
++template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS> {
++    static constexpr ggml_type gtype = GGML_TYPE_IQ4_XS;
++
++    using iq4_xs_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_IQ4_XS>;
++    using iq4_xs_traits = typename iq4_xs_block::traits;
++
++    // One 32-weight sub-block per lane: four words of nibbles, the same four as the non-reordered dot.
++    struct weights {
++        int   v1[iq4_xs_traits::vdr_mmvq];
++        int   v2[iq4_xs_traits::vdr_mmvq];
++        float d;  // d * (scale - 32)
++    };
++
++    struct activations {
++        int   u[8];
++        float d8;
++    };
++
++    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
++                                        const std::pair<int, int> d_offset, const int & iqs) {
++        const uint8_t *  base = static_cast<const uint8_t *>(vbq);
++        const uint32_t * q4   = reinterpret_cast<const uint32_t *>(base + ibx_offset.first) + iqs;
++        const uint8_t *  meta = base + d_offset.first;
++
++        weights w;
++#pragma unroll
++        for (int j = 0; j < iq4_xs_traits::vdr_mmvq; ++j) {
++            const uint32_t t0 = kvalues_iq4nl_pair[q4[j] & 0xff];
++            const uint32_t t1 = kvalues_iq4nl_pair[(q4[j] >> 8) & 0xff];
++            const uint32_t t2 = kvalues_iq4nl_pair[(q4[j] >> 16) & 0xff];
++            const uint32_t t3 = kvalues_iq4nl_pair[(q4[j] >> 24) & 0xff];
++
++            w.v1[j] = (int) ((t0 & 0xff) | ((t1 & 0xff) << 8) | ((t2 & 0xff) << 16) | ((t3 & 0xff) << 24));
++            w.v2[j] = (int) (((t0 >> 8) & 0xff) | (((t1 >> 8) & 0xff) << 8) | (((t2 >> 8) & 0xff) << 16) |
++                             (((t3 >> 8) & 0xff) << 24));
++        }
++
++        const int sub = iqs / iq4_xs_traits::vdr_mmvq;
++        const int ls  = ((meta[4 + sub / 2] >> 4 * (sub % 2)) & 0xf) |
++                        (((*(const uint16_t *) (meta + 2) >> 2 * sub) & 3) << 4);
++        w.d = (float) (*(const ggml_half *) meta) * (float) (ls - 32);
++
++        return w;
++    }
++
++    __dpct_inline__ static activations load_activations(const int8_t * q8_1_quant_ptr,
++                                                        const sycl::half2 * q8_1_ds, const int & iqs) {
++        const int sub = iqs / iq4_xs_traits::vdr_mmvq;
++        const int * u = reinterpret_cast<const int *>(q8_1_quant_ptr) + sub * (QK8_1 / sizeof(int));
++
++        activations a;
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            a.u[j] = u[j];
++        }
++        a.d8 = (*(q8_1_ds + sub))[0];
++
++        return a;
++    }
++
++    __dpct_inline__ static float apply(const weights & w, const activations & a) {
++        int sumi1 = 0;
++        int sumi2 = 0;
++#pragma unroll
++        for (int j = 0; j < iq4_xs_traits::vdr_mmvq; ++j) {
++            sumi1 = dpct::dp4a(w.v1[j], a.u[j + 0], sumi1);
++            sumi2 = dpct::dp4a(w.v2[j], a.u[j + 4], sumi2);
++        }
++
++        return w.d * a.d8 * (float) (sumi1 + sumi2);
++    }
++
++    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr,
++                                     const sycl::half2 * q8_1_ds, const int & iqs) {
++        return apply(w, load_activations(q8_1_quant_ptr, q8_1_ds, iqs));
++    }
++
++    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
++                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
++                                     const sycl::half2 * q8_1_ds, const int & iqs) {
++        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
++    }
++};
++
++template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_IQ4_XS> {
++    static constexpr bool value = true;
++};
++
++template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_IQ4_XS> {
++    static constexpr bool value = true;
++};
++
+ #endif // GGML_SYCL_VECDOTQ_HPP
