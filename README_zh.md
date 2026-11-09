@@ -12,3 +12,4 @@
 |---|---|---|---|
 | Qwen3.8 27B | llama.cpp（SYCL 层切分 / MTP 投机解码） | Q4_K_M | [中](qwen3.8-27b-llama-cpp-q4-k-m/README_zh.md) / [en](qwen3.8-27b-llama-cpp-q4-k-m/README.md) |
 | Qwen3.8 27B | vLLM（XPU 后端，自编译） | AWQ-INT4 | [中](qwen3.8-27b-vllm-awq/README_zh.md) / [en](qwen3.8-27b-vllm-awq/README.md) |
+| Qwen3.8 Flash-Next | Strata（SYCL 后端，自编译） | IQ1_M | [中](qwen3.8-flash-next-strata-coder-iq1-m/README_zh.md) / [en](qwen3.8-flash-next-strata-coder-iq1-m/README.md) |
