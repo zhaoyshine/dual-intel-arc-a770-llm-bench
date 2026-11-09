@@ -62,7 +62,7 @@ cd "$LLAMA_DIR"
 echo "== configure $BUILD_DIR =="
 cmake -B "$BUILD_DIR" "${CMAKE_ARGS[@]}"
 
-echo "== build: ${TARGETS[*]} (-j 12) =="
-cmake --build "$BUILD_DIR" --config Release -j 12 --target "${TARGETS[@]}"
+echo "== build: ${TARGETS[*]} (-j 20) =="
+cmake --build "$BUILD_DIR" --config Release -j 20 --target "${TARGETS[@]}"
 
 echo "完成: $LLAMA_DIR/$BUILD_DIR/bin/"

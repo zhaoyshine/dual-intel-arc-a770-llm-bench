@@ -31,13 +31,13 @@ case "$EFFORT" in
 esac
 
 [[ -x "$SYCL_SERVER_BIN" ]] || err "找不到 $SYCL_SERVER_BIN (先编译: ./build.sh sycl)"
-[[ -f "$MODEL" ]] || err "找不到模型 $MODEL"
+[[ -f "$START_MODEL" ]] || err "找不到模型 $START_MODEL"
 [[ -f "$DRAFT_MODEL" ]] || err "找不到 MTP draft 模型 $DRAFT_MODEL"
 
 sycl_env "$SYCL_SERVER_BIN"
 
 ARGS=(
-    -m "$MODEL"
+    -m "$START_MODEL"
     --alias qwen3.8-27b
     --split-mode tensor
     -ngl "$NGL"
@@ -52,12 +52,13 @@ ARGS=(
     --reasoning-effort "$EFFORT"
     --batch-size "$BS"
     --ubatch-size "$UBS"
+    --parallel 1
     -md "$DRAFT_MODEL"
     --spec-type draft-mtp
     --spec-draft-n-max "$DRAFT_N_MAX"
+    --spec-draft-p-min 0.6
     --cache-type-k-draft "$KV_TYPE"
     --cache-type-v-draft "$KV_TYPE"
-    --parallel 1
     -ngld "$NGL"
     -devd "$MTP_DEVICE"
     -ts "$MAIN_TS"

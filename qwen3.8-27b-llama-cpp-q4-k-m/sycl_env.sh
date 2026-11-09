@@ -17,6 +17,7 @@ sycl_env() {
 
     export ONEAPI_DEVICE_SELECTOR="level_zero:0;level_zero:1"
     export SYCL_UR_USE_LEVEL_ZERO_V2=1
-    export ZES_ENABLE_SYSMAN=1    # 查显存余量
+    export ZES_ENABLE_SYSMAN=1
+    export SYCL_ENABLE_DEFAULT_CONTEXTS=0 # 和 SYCL_UR_USE_LEVEL_ZERO_V2 冲突, 需要禁用，等修复https://github.com/oneapi-src/level-zero/issues/556
     export LD_LIBRARY_PATH="$libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 }
