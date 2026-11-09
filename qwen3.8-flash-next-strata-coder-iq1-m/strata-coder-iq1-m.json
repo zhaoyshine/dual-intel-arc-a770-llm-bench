@@ -1,0 +1,38 @@
+{
+  "backend": "sycl",
+  "exe": "/home/yao/workspace/ai/Strata/build-sycl/sycl/strata",
+  "cwd": "/home/yao/workspace/ai/Strata",
+  "tokenizer": "/home/yao/workspace/ai/Strata-data/packs/coder_iq1_m/tokenizer",
+  "model_name": "qwen3.8-flash-next-coder-iq1-m",
+  "args": [
+    "--pack", "/home/yao/workspace/ai/Strata-data/packs/coder_iq1_m",
+    "--native", "/home/yao/workspace/ai/models/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf",
+    "--ple-gguf", "/home/yao/workspace/ai/models/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf",
+    "--expert-profile", "/home/yao/workspace/ai/Strata/data/expert-profile-coder.bin",
+    "--expert-cache", "auto",
+    "--resident-experts",
+    "--prefill", "auto",
+    "--spec", "4",
+    "--spec-min-p", "0.5",
+    "--mtp", "/home/yao/workspace/ai/Strata-data/mtp/rt",
+    "--max-context", "131072",
+    "--kv", "int8",
+    "--kv-resident", "20480",
+    "--vram-reserve-mib", "1024"
+  ],
+  "env": {
+    "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+    "STRATA_VERIFY_DEVICE_PLAN": "1",
+    "STRATA_VERIFY_NO_HOST": "1",
+    "STRATA_STAGER_THREADS": "12",
+    "IGC_EnableDPEmulation": "1",
+    "OverrideDefaultFP64Settings": "1",
+    "NEOReadDebugKeys": "1"
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.05
+  }
+}
