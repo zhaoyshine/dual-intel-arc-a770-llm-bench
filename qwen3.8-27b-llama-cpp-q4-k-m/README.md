@@ -118,19 +118,12 @@ make build sycl          # build SYCL backend
 make build vulkan        # build Vulkan baseline
 make bench               # run all five configs sequentially
 make bench sycl          # a single config: vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp
-make start               # effort low (default); MTP speculative decoding; llama-server, OpenAI-compatible API, 127.0.0.1:8080
-make start high          # effort levels: low (default) | medium | high
+make start               # effort hardcoded low; MTP speculative decoding; llama-server, OpenAI-compatible API, 127.0.0.1:8080
 make devices             # list devices visible to llama.cpp
 curl http://127.0.0.1:8080/v1/chat/completions
 ```
 
-Three reasoning-effort levels; MTP speculative decoding is always on:
-
-| Level | `--reasoning-effort` | thinking |
-|---|---|---|
-| `low` (default) | `low` | brief |
-| `medium` | `medium` | balanced |
-| `high` | `high` → `xhigh` | deepest |
+Reasoning effort is hardcoded per model: unsloth Q4_K_M low, ThinkingCap medium, Coder390 high; MTP speculative decoding is always on.
 
 > MTP pins the draft model to GPU 0 and splits the main model 0.48/0.52; KV type q8_0, batch 2048, ubatch 1024.
 

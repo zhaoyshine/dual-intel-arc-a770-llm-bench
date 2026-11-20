@@ -118,19 +118,12 @@ make build sycl          # 编译 SYCL 后端
 make build vulkan        # 编译 Vulkan 对照
 make bench               # 串行运行全部五种配置
 make bench sycl          # 指定配置: vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp
-make start               # 档位 low (默认); MTP 投机解码; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
-make start high          # 思考档位: low (默认) | medium | high
+make start               # 思考档位写死 low; MTP 投机解码; llama-server, OpenAI 兼容 API, 127.0.0.1:8080
 make devices             # 列出 llama.cpp 可见设备
 curl http://127.0.0.1:8080/v1/chat/completions
 ```
 
-三种思考档位; MTP 投机解码常开:
-
-| 档位 | `--reasoning-effort` | 思考 |
-|---|---|---|
-| `low`（默认） | `low` | 简短 |
-| `medium` | `medium` | 均衡 |
-| `high` | `high` → `xhigh` | 最深 |
+思考档位按模型写死: unsloth Q4_K_M low, ThinkingCap medium, Coder390 high; MTP 投机解码常开。
 
 > MTP 将 draft 模型固定在 GPU 0，主模型按 0.48/0.52 切分；KV 类型 q8_0，batch 2048，ubatch 1024。
 

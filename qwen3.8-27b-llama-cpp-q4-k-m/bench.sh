@@ -5,14 +5,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 # shellcheck source=config.sh
 source "$SCRIPT_DIR/config.sh"
 # shellcheck source=sycl_env.sh
 source "$SCRIPT_DIR/sycl_env.sh"
 
-VULKAN_BIN=~/workspace/ai/llama.cpp/build-vulkan/bin/llama-bench
-SYCL_BENCH_BIN=~/workspace/ai/llama.cpp/build-sycl/bin/llama-bench
-SYCL_CLI_BIN=~/workspace/ai/llama.cpp/build-sycl/bin/llama-cli
+VULKAN_BENCH=$VULKAN_BUILD/bin/llama-bench
+SYCL_BENCH=$SYCL_BUILD/bin/llama-bench
+SYCL_CLI=$SYCL_BUILD/bin/llama-cli
 
 # 别用重复短句当提示词——输出与输入同分布, 无法代表真实场景
 read -r -d '' PROMPT <<'EOF' || true
@@ -40,28 +42,27 @@ BENCH_ARGS=(
 )
 
 run_vulkan() {
-    [[ -x "$VULKAN_BIN" ]] || { echo "错误: 找不到 $VULKAN_BIN (先编译: ./build.sh vulkan)" >&2; return 1; }
-    echo "== [1/5] Vulkan 自编译 (build-vulkan) =="
-    "$VULKAN_BIN" --device Vulkan1,Vulkan2 --split-mode layer "${BENCH_ARGS[@]}"
+    [[ -x "$VULKAN_BENCH" ]] || { echo "错误: 找不到 $VULKAN_BENCH (先编译: ./build.sh vulkan)" >&2; return 1; }
+    echo "vulkan"
+    "$VULKAN_BENCH" --device Vulkan1,Vulkan2 --split-mode layer "${BENCH_ARGS[@]}"
 }
 
 run_sycl() {
-    local n=$1 split=$2
-    [[ -x "$SYCL_BENCH_BIN" ]] || { echo "错误: 找不到 $SYCL_BENCH_BIN (先编译: ./build.sh sycl)" >&2; return 1; }
-    sycl_env "$SYCL_BENCH_BIN"
-    echo "== [$n/5] SYCL $split split (build-sycl) =="
-    "$SYCL_BENCH_BIN" --split-mode "$split" "${BENCH_ARGS[@]}"
+    local split=$1
+    [[ -x "$SYCL_BENCH" ]] || { echo "错误: 找不到 $SYCL_BENCH (先编译: ./build.sh sycl)" >&2; return 1; }
+    sycl_env "$SYCL_BENCH"
+    echo "sycl-$split"
+    "$SYCL_BENCH" --split-mode "$split" "${BENCH_ARGS[@]}"
 }
 
 # llama-bench 不支持 draft 参数, 投机只能走 llama-cli
 run_sycl_mtp() {
-    local n=$1 split=$2
-    [[ -x "$SYCL_CLI_BIN" ]] || { echo "错误: 找不到 $SYCL_CLI_BIN (先编译: ./build.sh sycl)" >&2; return 1; }
+    local split=$1
+    [[ -x "$SYCL_CLI" ]] || { echo "错误: 找不到 $SYCL_CLI (先编译: ./build.sh sycl)" >&2; return 1; }
     [[ -f "$DRAFT_MODEL" ]] || { echo "错误: 找不到 MTP draft 模型 $DRAFT_MODEL" >&2; return 1; }
-    sycl_env "$SYCL_CLI_BIN"
-    echo "== [$n/5] SYCL $split split + MTP 投机解码 (llama-cli, draft-n-max $DRAFT_N_MAX) =="
-    echo "draft: $(basename "$DRAFT_MODEL") | prompt: ${#PROMPT} 字符"
-    "$SYCL_CLI_BIN" -m "$MODEL" -md "$DRAFT_MODEL" \
+    sycl_env "$SYCL_CLI"
+    echo "sycl-$split-mtp"
+    "$SYCL_CLI" -m "$MODEL" -md "$DRAFT_MODEL" \
         --spec-type draft-mtp \
         --spec-draft-n-max "$DRAFT_N_MAX" \
         --cache-type-k-draft "$KV_TYPE" \
@@ -82,39 +83,25 @@ run_sycl_mtp() {
 }
 
 show_devices() {
-    [[ -x "$SYCL_BENCH_BIN" ]] || err "找不到 $SYCL_BENCH_BIN (需先编译 build-sycl)"
-    sycl_env "$SYCL_BENCH_BIN"
-    "$SYCL_BENCH_BIN" --list-devices
-}
-
-usage() {
-    cat <<'EOF'
-用法: ./bench.sh [all|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp|devices]
-
-  all              串行跑全部五种配置 (默认, 结果与结论见 README.md)
-  vulkan           自编译 Vulkan (build-vulkan)
-  sycl             SYCL layer split (build-sycl)
-  sycl-tensor      SYCL tensor split (build-sycl)
-  sycl-mtp         SYCL layer split + MTP 投机解码 (llama-cli + draft 模型)
-  sycl-tensor-mtp  SYCL tensor split + MTP 投机解码 (llama-cli + draft 模型)
-  devices          列出 llama.cpp 可见设备
-EOF
+    [[ -x "$SYCL_BENCH" ]] || err "找不到 $SYCL_BENCH (先编译: ./build.sh sycl)"
+    sycl_env "$SYCL_BENCH"
+    "$SYCL_BENCH" --list-devices
 }
 
 case "${1:-all}" in
     all)
-        run_vulkan           || true; sleep 8
-        run_sycl     2 layer || true; sleep 8
-        run_sycl     3 tensor || true; sleep 8
-        run_sycl_mtp 4 layer || true; sleep 8
-        run_sycl_mtp 5 tensor || true
+        run_vulkan || true; sleep 8
+        run_sycl layer || true; sleep 8
+        run_sycl tensor || true; sleep 8
+        run_sycl_mtp layer || true; sleep 8
+        run_sycl_mtp tensor || true
         ;;
     vulkan)          run_vulkan ;;
-    sycl)            run_sycl 2 layer ;;
-    sycl-tensor)     run_sycl 3 tensor ;;
-    sycl-mtp)        run_sycl_mtp 4 layer ;;
-    sycl-tensor-mtp) run_sycl_mtp 5 tensor ;;
+    sycl)            run_sycl layer ;;
+    sycl-tensor)     run_sycl tensor ;;
+    sycl-mtp)        run_sycl_mtp layer ;;
+    sycl-tensor-mtp) run_sycl_mtp tensor ;;
     devices)         show_devices ;;
-    -h|--help|help) usage ;;
-    *)       usage >&2; err "未知参数 '$1'" ;;
+    -h|--help|help)  echo "用法: ./bench.sh [all|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp|devices]"; exit 0 ;;
+    *)               usage "用法: ./bench.sh [all|vulkan|sycl|sycl-tensor|sycl-mtp|sycl-tensor-mtp|devices]"; err "未知参数 '$1'" ;;
 esac

@@ -1,25 +1,17 @@
 #!/bin/bash
 # 切换 Intel Arc A770 内核驱动 i915 / xe (改引导参数 + 重建 initramfs, 重启生效)
-# 用法: ./gpu_driver.sh status|i915|xe
+# 用法: ./gpu_driver.sh [status|i915|xe]
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 # 内核默认将 DG2 交给 i915, 切 xe 须显式 force_probe
 PCI_ID=8086:56a0        # A770 (DG2)
 ARGS_XE="xe.force_probe=56a0 i915.force_probe=!56a0"
 ARGS_I915="i915.force_probe=56a0 xe.force_probe=!56a0"
-
-err() { echo "错误: $*" >&2; exit 1; }
-
-usage() {
-    cat <<'EOF'
-用法: ./gpu_driver.sh status|i915|xe
-
-  status  显示每张 A770 当前绑定的驱动与引导参数
-  i915    切回默认的 i915 驱动 (重启生效)
-  xe      切到 xe 驱动 (重启生效)
-EOF
-}
 
 a770_devs() {
     lspci -Dn | awk -v id="$PCI_ID" '$3 == id { print $1 }'
@@ -57,7 +49,6 @@ set_driver() {
         --args="$args"
     sudo dracut -f
     echo "已切到 $driver, 重启生效: sudo systemctl reboot"
-    echo "重启后验证: ./gpu_driver.sh status"
 }
 
 [[ -n "$(a770_devs)" ]] || err "没找到 A770 ($PCI_ID)"
@@ -65,6 +56,6 @@ set_driver() {
 case "${1:-}" in
     status)  show_status ;;
     i915|xe) set_driver "$1" ;;
-    -h|--help|help) usage ;;
-    *)       usage >&2; err "未知参数 '${1:-}'" ;;
+    -h|--help|help) echo "用法: ./gpu_driver.sh [status|i915|xe]"; exit 0 ;;
+    *)               usage "用法: ./gpu_driver.sh [status|i915|xe]"; err "未知参数 '${1:-}'" ;;
 esac

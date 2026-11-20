@@ -5,14 +5,16 @@
 
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LLAMA_DIR=~/workspace/ai/llama.cpp
-SRC_DIR=~/workspace/ai/llama.cpp-opt-src
-BUILD_DIR="$LLAMA_DIR/build-sycl-opt"
-PATCHES=("$DIR"/patches/*.patch)
-TARGETS=(llama-bench llama-server llama-cli)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../common.sh
+source "$SCRIPT_DIR/../common.sh"
+# shellcheck source=../config.sh
+source "$SCRIPT_DIR/../config.sh"
 
-err() { echo "错误: $*" >&2; exit 1; }
+SRC_DIR=$LLAMA_DIR-opt-src
+BUILD_DIR=$LLAMA_DIR/build-sycl-opt
+PATCHES=("$SCRIPT_DIR"/patches/*.patch)
+TARGETS=(llama-bench llama-server llama-cli)
 
 [[ -d "$LLAMA_DIR" ]] || err "找不到 llama.cpp 源码 $LLAMA_DIR"
 [[ -f "${PATCHES[0]}" ]] || err "找不到补丁 ${PATCHES[0]}"
@@ -24,12 +26,10 @@ fi
 # llama.cpp HEAD 或补丁内容变化时重新导出, 否则沿用已有副本
 stamp=$({ git -C "$LLAMA_DIR" rev-parse HEAD; cat "${PATCHES[@]}"; } | md5sum | cut -d' ' -f1)
 if [[ ! -f "$SRC_DIR/.patch-stamp" || "$(cat "$SRC_DIR/.patch-stamp")" != "$stamp" ]]; then
-    echo "== 导出源码 + 打补丁 -> $SRC_DIR =="
     rm -rf "$SRC_DIR"
     mkdir -p "$SRC_DIR"
     git -C "$LLAMA_DIR" archive HEAD | tar -x -C "$SRC_DIR"
     for p in "${PATCHES[@]}"; do
-        echo "-- $(basename "$p")"
         patch -d "$SRC_DIR" -p1 --no-backup-if-mismatch < "$p"
     done
     # 导出树自己的 git 仓库: cmake 会在这里跑 git describe, 没有仓库就报 "不是 Git 仓库" 且 build 号变成 unknown
@@ -38,6 +38,7 @@ if [[ ! -f "$SRC_DIR/.patch-stamp" || "$(cat "$SRC_DIR/.patch-stamp")" != "$stam
     git -C "$SRC_DIR" -c user.name=build -c user.email=build@local \
         commit -qm "llama.cpp $(git -C "$LLAMA_DIR" rev-parse --short=8 HEAD) + IQ4_XS MMVQ" || true
     echo "$stamp" > "$SRC_DIR/.patch-stamp"
+    echo "已导出并打补丁: $SRC_DIR"
 fi
 
 # 缺 ze_api.h 编出的二进制启动即 GGML_ABORT
@@ -48,14 +49,12 @@ fi
 if ! command -v icpx >/dev/null 2>&1; then
     setvars=/opt/intel/oneapi/setvars.sh
     [[ -f "$setvars" ]] || err "找不到 $setvars (需先装 intel-oneapi-toolkit)"
-    echo "== source $setvars =="
     set +eu
     # shellcheck disable=SC1090
     source "$setvars"
     set -euo pipefail
 fi
 
-echo "== configure $BUILD_DIR =="
 # 与 ../build.sh 的 sycl 配置保持一致, 只多一个补丁源码目录, 保证结果可对比
 cmake -B "$BUILD_DIR" -S "$SRC_DIR" \
     -DGGML_SYCL=ON \
@@ -63,8 +62,4 @@ cmake -B "$BUILD_DIR" -S "$SRC_DIR" \
     -DGGML_SYCL_DEVICE_ARCH=acm_g10 \
     -DCMAKE_C_COMPILER=icx \
     -DCMAKE_CXX_COMPILER=icpx
-
-echo "== build: ${TARGETS[*]} (-j 12) =="
 cmake --build "$BUILD_DIR" --config Release -j 12 --target "${TARGETS[@]}"
-
-echo "完成: $BUILD_DIR/bin/"

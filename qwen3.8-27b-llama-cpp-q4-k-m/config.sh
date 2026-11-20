@@ -1,10 +1,14 @@
 #!/bin/bash
 # shellcheck disable=SC2034
-# bench.sh / start.sh 共用配置
+# 各脚本共用: 模型路径 + llama.cpp 构建目录 + 推理参数
+
+LLAMA_DIR=~/workspace/ai/llama.cpp
+SYCL_BUILD=$LLAMA_DIR/build-sycl
+VULKAN_BUILD=$LLAMA_DIR/build-vulkan
 
 MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf
-START_MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf
 DRAFT_MODEL=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
+MMPROJ=~/workspace/ai/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
 
 # 通用推理
 NGL=999

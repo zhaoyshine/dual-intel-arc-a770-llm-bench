@@ -4,14 +4,15 @@
 
 set -euo pipefail
 
-LLAMA_DIR=~/workspace/ai/llama.cpp
-BACKEND="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+# shellcheck source=config.sh
+source "$SCRIPT_DIR/config.sh"
 
-err() { echo "错误: $*" >&2; exit 1; }
-
-case "$BACKEND" in
+case "${1:-}" in
     sycl)
-        BUILD_DIR=build-sycl
+        BUILD_DIR=$SYCL_BUILD
         TARGETS=(llama-bench llama-server llama-cli)
         CMAKE_ARGS=(
             -DGGML_SYCL=ON
@@ -29,7 +30,6 @@ case "$BACKEND" in
         if ! command -v icpx >/dev/null 2>&1; then
             setvars=/opt/intel/oneapi/setvars.sh
             [[ -f "$setvars" ]] || err "找不到 $setvars (需先装 intel-oneapi-toolkit)"
-            echo "== source $setvars =="
             set +eu
             # shellcheck disable=SC1090
             source "$setvars"
@@ -37,7 +37,7 @@ case "$BACKEND" in
         fi
         ;;
     vulkan)
-        BUILD_DIR=build-vulkan
+        BUILD_DIR=$VULKAN_BUILD
         TARGETS=(llama-bench)
         CMAKE_ARGS=(-DGGML_VULKAN=ON)
 
@@ -45,7 +45,7 @@ case "$BACKEND" in
         command -v glslc >/dev/null 2>&1 ||
             err "缺 glslc, 安装: sudo dnf install glslc vulkan-headers spirv-headers-devel vulkan-loader-devel"
         ;;
-    -h|--help)
+    -h|--help|help)
         echo "用法: ./build.sh sycl|vulkan"
         exit 0
         ;;
@@ -54,15 +54,6 @@ case "$BACKEND" in
         ;;
 esac
 
-[[ -d "$LLAMA_DIR" ]] || err "找不到 llama.cpp 源码 $LLAMA_DIR"
-
-cd "$LLAMA_DIR"
-
 # cmake --build 的 auto-reconfigure 不重跑 find_path, 装新依赖头后须显式 configure
-echo "== configure $BUILD_DIR =="
 cmake -B "$BUILD_DIR" "${CMAKE_ARGS[@]}"
-
-echo "== build: ${TARGETS[*]} (-j 20) =="
 cmake --build "$BUILD_DIR" --config Release -j 20 --target "${TARGETS[@]}"
-
-echo "完成: $LLAMA_DIR/$BUILD_DIR/bin/"
