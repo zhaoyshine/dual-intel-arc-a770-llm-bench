@@ -1,0 +1,6 @@
+opt/
+build/
+.venv/
+.uv/
+cache/
+logs/
