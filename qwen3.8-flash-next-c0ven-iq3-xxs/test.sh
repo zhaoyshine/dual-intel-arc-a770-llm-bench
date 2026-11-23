@@ -3,168 +3,63 @@
 #   1. 速度：PP 与 TG 分开 bench —— PP 用 1024-token 提示，TG 用短提示（纯 decode），各 3 次取中位数
 #   2. 正确性：10-20 token 内容输入 + 128 输出，同一输入跑两次（temperature 0），与参考答案比对
 # 计时方式同 docs/BENCHMARKS.md：PP = prompt tokens / 首 token 时间，TG = 首 token 之后 / 末 token 时间。
-# 官方 bench 不预热，用每次全新进程、6 次取中位数；这里一次启动、3 次取中位数。
-# 每次都写到 logs/run-<时间>/（磁盘，重启后还在）：service.log、sampler.jsonl、kernel-prev.log。
-#   sampler.jsonl 每 1 s 一行：负载、内存、CPU/内存/GPU 温度、GPU 能耗、/metrics 的关键 counters。
-#   kernel-prev.log 是上一次启动的内核日志（MCE 在其中）。
+# 服务输出丢弃，终端只打印测试结果。
 # 用法: ./test.sh
-
-set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/config.sh"
 
 URL="http://$HOST:$PORT"
 SIM_MIN=0.90
-LOGDIR="${LOGDIR:-$SCRIPT_DIR/logs}"
-RUN="$LOGDIR/run-$(date +%Y%m%d-%H%M%S)"
-LOG="$RUN/service.log"
 
 err() { echo "错误: $*" >&2; exit 1; }
 
 [[ -f "$BUILD_DIR/core/libengine.so" ]] || err "找不到 $BUILD_DIR/core/libengine.so (先编译)"
 [[ -f "$MODEL_FILE" ]] || err "找不到模型 $MODEL_FILE"
-mkdir -p "$RUN" || err "无法写日志目录 $RUN"
-
-# 上一次启动的内核日志：重启的 MCE 记录在这里。
-journalctl -k -b -1 -n 400 --no-pager > "$RUN/kernel-prev.log" 2>/dev/null || true
-
-cat > "$RUN/sampler.py" <<'SAMPLER'
-import glob, json, os, sys, time, urllib.request
-
-url = sys.argv[1]
-out = open(sys.argv[2], "a", buffering=1)
-
-def rd(p):
-    try:
-        with open(p) as f:
-            return f.read().strip()
-    except OSError:
-        return ""
-
-def sensors():
-    t, e, v = {}, {}, {}
-    for name in glob.glob("/sys/class/hwmon/hwmon*/name"):
-        d = os.path.dirname(name)
-        kind = rd(name)
-        if kind not in ("k10temp", "jc42", "xe"):
-            continue
-        for p in glob.glob(d + "/temp*_input"):
-            t[f"{kind}{d[-1]}/{os.path.basename(p)[:-6]}"] = rd(p)
-        for p in glob.glob(d + "/energy*_input"):
-            e[f"{kind}{d[-1]}/{os.path.basename(p)[:-6]}"] = rd(p)
-        for p in glob.glob(d + "/in*_input"):
-            v[f"{kind}{d[-1]}/{os.path.basename(p)[:-6]}"] = rd(p)
-    return t, e, v
-
-def core():
-    try:
-        with urllib.request.urlopen(url + "/metrics", timeout=2) as r:
-            c = json.load(r)["core"]
-        return {k: c.get(k) for k in ("rounds", "round_rows", "round_ns", "steps", "round_misses",
-                                      "layer_drafts", "layer_accepted", "lookup_drafts", "lookup_accepted",
-                                      "swap_rounds", "swap_ns", "experts_cached", "writing", "reading", "waiting")}
-    except Exception:
-        return {}
-
-while True:
-    mhz = []
-    for line in open("/proc/cpuinfo"):
-        if line.startswith("cpu MHz"):
-            mhz.append(float(line.split(":")[1]))
-    mem = {k: v for k, v in (l.split(":") for l in open("/proc/meminfo"))}
-    vm = {}
-    for line in open("/proc/vmstat"):
-        k, v = line.split()
-        if k in ("compact_stall", "compact_fail", "pgscan_direct", "pgsteal_direct", "pswpin", "pswpout",
-                 "oom_kill", "pgmajfault", "thp_fault_alloc"):
-            vm[k] = int(v)
-    t, e, v = sensors()
-    row = {
-        "t": time.strftime("%H:%M:%S"),
-        "up_s": rd("/proc/uptime").split()[0],
-        "load": rd("/proc/loadavg").split()[:3],
-        "mem_free_mb": mem["MemFree"].split()[0],
-        "mem_avail_mb": mem["MemAvailable"].split()[0],
-        "mem_dirty_kb": mem.get("Dirty", "0 kB").split()[0],
-        "cpu_mhz_max": int(max(mhz)) if mhz else None,
-        "vmstat": vm,
-        "temps": t,
-        "energy": e,
-        "volts": v,
-        "core": core(),
-    }
-    out.write(json.dumps(row, separators=(",", ":")) + "\n")
-    time.sleep(1)
-SAMPLER
 
 stop_all() {
-    [[ -n "${SAMPLER_PID:-}" ]] && kill "$SAMPLER_PID" 2>/dev/null || true
-    [[ -n "${KLOG_PID:-}" ]] && kill "$KLOG_PID" 2>/dev/null || true
     pkill -TERM -f "python -m frontend" 2>/dev/null || true
     for _ in $(seq 1 60); do
-        pgrep -f "[p]ython -m engine" >/dev/null || return 0
+        pgrep -f "[p]ython -m engine" >/dev/null || break
         sleep 1
     done
-    echo "警告: 引擎 60s 未退出" >&2
+    for _ in $(seq 1 60); do
+        pgrep -f "[p]ython -m frontend" >/dev/null || return 0
+        sleep 1
+    done
+    echo "警告: 进程 60s 未退出" >&2
 }
 
-reuse=0
-if [[ "${REUSE:-0}" = 1 ]] && /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
-    reuse=1
-fi
-if [[ $reuse = 1 ]]; then
-    echo "== 复用已运行的服务（REUSE=1），不停也不重启 =="
-else
-    trap stop_all EXIT
+trap stop_all EXIT
 
-    echo "== 停止已有服务 =="
-    stop_all
-    sleep 1
+echo "== 停止已有服务 =="
+stop_all
+sleep 1
 
-    echo "== 日志目录 $RUN =="
-    nohup python3 "$RUN/sampler.py" "$URL" "$RUN/sampler.jsonl" > /dev/null 2>&1 &
-    SAMPLER_PID=$!
-    cat > "$RUN/klog-sync.py" <<'KLOGEOF'
-import os, sys
-f = os.fdopen(os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_SYNC), "w", buffering=1)
-for line in sys.stdin:
-    f.write(line)
-    f.flush()
-    os.fsync(f.fileno())
-KLOGEOF
-    journalctl -k -f --no-pager -o short-precise 2>/dev/null | python3 -u "$RUN/klog-sync.py" "$RUN/kernel-live.log" &
-    KLOG_PID=$!
+echo "== 启动服务 =="
+cd "$C0VEN_DIR"
+"$SCRIPT_DIR/start.sh" >/dev/null 2>&1 &
+cd "$SCRIPT_DIR"
 
-    echo "== 启动服务（日志 $LOG，实时也有 logs/service-live.log）=="
-    export ENGINE_TIMING_LOG="$RUN/timing.csv"
-    export SERVICE_LOG="$LOG"
-    ln -sfn "$LOG" "$SCRIPT_DIR/logs/service-live.log"
-    cd "$C0VEN_DIR"
-    nohup "$SCRIPT_DIR/start.sh" --metrics-log 1 "$@" > "$LOG" 2>&1 &
-    cd "$SCRIPT_DIR"
+echo "== 等待加载 =="
+ok=0
+for _ in $(seq 1 200); do
+    if /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
+        ok=1
+        break
+    fi
+    if ! pgrep -f "[p]ython -m frontend" >/dev/null; then
+        echo "服务进程已退出" >&2
+        break
+    fi
+    sleep 2
+done
+[[ $ok = 1 ]] || err "服务未就绪，跑 ./start.sh 看输出"
 
-    echo "== 等待加载 =="
-    ok=0
-    for _ in $(seq 1 200); do
-        if /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
-            ok=1
-            break
-        fi
-        if ! pgrep -f "[p]ython -m frontend" >/dev/null; then
-            echo "服务进程已退出" >&2
-            break
-        fi
-        sleep 2
-    done
-    [[ $ok = 1 ]] || { tail -n 20 "$LOG" >&2; err "服务未就绪，见 $LOG"; }
-    grep -i "core open" "$LOG" | tail -1
-fi
-
-python3 - "$URL" "$SIM_MIN" "${PP_ONLY:-0}" <<'PY'
+python3 - "$URL" "$SIM_MIN" <<'PY'
 import json, sys, difflib, statistics, time, urllib.request
 
-url, sim_min, pp_only = sys.argv[1], float(sys.argv[2]), sys.argv[3] == "1"
+url, sim_min = sys.argv[1], float(sys.argv[2])
 
 def core():
     with urllib.request.urlopen(url + "/metrics", timeout=30) as r:
@@ -224,10 +119,6 @@ for i in range(3):
     print(f"  run {i + 1}: {u['prompt_tokens']} token, 首 token {first:.2f}s -> PP {pp:.1f} tok/s")
 pp_med = statistics.median(pps)
 
-if pp_only:
-    print(f"中位数: PP {statistics.median(pps):.1f} tok/s")
-    sys.exit(0)
-
 print("== 测试 1b：TG（短提示，纯 decode）==")
 prompt_tg = "Write a detailed story about a fox."
 c_before = core()
@@ -240,8 +131,6 @@ for i in range(3):
           f"解码 {last - first:.2f}s -> TG {tg:.1f} tok/s")
 tg_med = statistics.median(tgs)
 print(f"中位数: PP {pp_med:.1f} tok/s, TG {tg_med:.1f} tok/s")
-if pp_only:
-    sys.exit(0)
 d = diff_keys(c_before, core())
 r = max(1, d["rounds"])
 drafts = d["layer_drafts"] + d["lookup_drafts"]
@@ -290,6 +179,6 @@ echo
 if [[ $rc -eq 0 ]]; then
     echo "== 全部通过 =="
 else
-    echo "== 失败（退出码 $rc），日志 $LOG =="
+    echo "== 失败（退出码 $rc）=="
 fi
 exit $rc

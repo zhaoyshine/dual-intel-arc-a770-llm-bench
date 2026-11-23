@@ -11,7 +11,7 @@ c0ven 官方只发 Docker 镜像，这里把它的构建步骤搬到本机 Fedor
 ```bash
 ./build.sh    # 编译，产物在 build/，AOT kernel 目标 acm-g10
 ./start.sh    # 启动服务 (127.0.0.1:8080)
-./test.sh     # 测 PP、TG 和正确性，日志写在 logs/run-<时间>/
+./test.sh     # 测 PP、TG 和正确性
 ```
 
 系统依赖：`level-zero-devel`、`intel-ocloc`（本机 26.35，c0ven 钉 26.40）、python3.14。

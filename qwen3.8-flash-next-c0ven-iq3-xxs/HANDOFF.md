@@ -60,8 +60,7 @@ OpenCL C，可直接搬）：
 - `kernels/CMakeLists.txt`：gemm_big、gemm_big_bf16、pack。
 - 测试：`gemm_test` 的 big 覆盖（非对齐形状、Y2、f16/bf16、f32 输出、混合形状、逐轮 fsync 压测 `BIG_STRESS`）；
   `qgemm_test` 的 `dequant_f16_p` 逐位测试。
-- 工具：`start.sh` 服务输出 O_SYNC 落盘 `logs/service-live.log`；`test.sh` 支持 `REUSE=1`、`PP_ONLY=1`，内核
-  日志 `journalctl -k -f` 也 O_SYNC。
+- 工具：`test.sh` 固定全量测试。
 
 ### 已验证
 
@@ -432,11 +431,7 @@ OpenCL C，可直接搬）：
 
 ## 测试
 
-`./test.sh [start.sh 参数...]`：起服务（默认配置），PP 与 TG 各 3 次取中位数；正确性两次对比；每次写
-`logs/run-<时间>/`（service.log、sampler.jsonl、timing.csv、kernel-prev.log、kernel-live.log）。
-`REUSE=1 PP_ONLY=1 ./test.sh` 复用已运行服务只测 PP。
-环境变量：只剩 `ENGINE_DRAFT_MAX`/`ENGINE_DRAFT_MIN_P`（start.sh 显式设 7 / 0.5，与 B60 一致）；
-调试/二分开关已全部删除。
+`./test.sh`：起服务（默认配置），PP 与 TG 各 3 次取中位数；正确性两次对比。
 旧脚本：`bench_prompt.py 200 48`（长提示正确性，输出退化成一串重复词即里程碑 1 回归）。
 
 ## 构建与运行

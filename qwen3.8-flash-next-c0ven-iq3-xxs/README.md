@@ -11,7 +11,7 @@ it, and Python packages with uv 0.12.22 in `.venv`.
 ```bash
 ./build.sh    # into build/, AOT kernels for acm-g10
 ./start.sh    # serve on 127.0.0.1:8080
-./test.sh     # PP, TG and a correctness check; logs under logs/run-<time>/
+./test.sh     # PP, TG and a correctness check
 ```
 
 The system needs `level-zero-devel`, `intel-ocloc` (26.35 here; c0ven pins 26.40) and python3.14.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # 启动 c0ven 服务 (Qwen3.8-Flash-Next GSQ-RCO IQ3_XXS, OpenAI + Anthropic 兼容), 参数同 README 的双 B60 启动命令
 # 依赖: ./build.sh 编出的 build/core/libengine.so
-# 用法: ./start.sh [额外参数...]
+# 用法: ./start.sh
 
 set -euo pipefail
 
@@ -21,23 +21,6 @@ export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
 export ZES_ENABLE_SYSMAN=1
 [[ -n "$ZE_AFFINITY_MASK" ]] && export ZE_AFFINITY_MASK
 
-# Every line the service and the engine print goes to one file, flushed line by line, so a hard reset leaves the last
-# one on disk. SERVICE_LOG overrides it; test.sh points it at the run's own log.
-export PYTHONUNBUFFERED=1
-SERVICE_LOG="${SERVICE_LOG:-$SCRIPT_DIR/logs/service-live.log}"
-mkdir -p "$(dirname "$SERVICE_LOG")"
-# Line by line with fsync: a hard reset leaves every line the service printed on disk, the last one included.
-LOGGER="$SCRIPT_DIR/logs/log-sync.py"
-cat > "$LOGGER" <<'LOGEOF'
-import os, sys
-f = os.fdopen(os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_SYNC), "w", buffering=1)
-for line in sys.stdin:
-    f.write(line)
-    f.flush()
-    os.fsync(f.fileno())
-LOGEOF
-exec > >(exec python3 -u "$LOGGER" "$SERVICE_LOG") 2>&1
-
 export ENGINE_LIBRARY="$BUILD_DIR/core/libengine.so"
 export ENGINE_CACHE_DIR
 export PYTHONPATH="$C0VEN_DIR"
@@ -49,5 +32,4 @@ exec "$VENV/bin/python" -m frontend \
     --context "$CONTEXT" \
     --host "$HOST" \
     --port "$PORT" \
-    "${ENGINE_ARGS[@]}" \
-    "$@"
+    "${ENGINE_ARGS[@]}"
