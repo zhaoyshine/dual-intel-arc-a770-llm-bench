@@ -1,0 +1,9 @@
+# c0ven 与 opt/llama.cpp 是上游克隆, 各自带 .git
+c0ven/
+opt/
+build/
+cache/
+.venv/
+.uv/
+logs/
+build.log
