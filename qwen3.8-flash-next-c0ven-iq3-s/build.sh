@@ -51,6 +51,11 @@ echo "== uv sync -> $VENV =="
 UV_PROJECT_ENVIRONMENT="$VENV" UV_PYTHON="$py" UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy \
     "$uv" sync --project "$C0VEN_DIR" --locked --no-dev
 
+# monitor.py 的终端面板依赖; c0ven 的运行时依赖里没有
+echo "== uv pip install monitor 依赖 =="
+UV_PROJECT_ENVIRONMENT="$VENV" UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy \
+    "$uv" pip install --python "$VENV/bin/python" -r "$SCRIPT_DIR/requirements-monitor.txt"
+
 # 只编译本机 CPU 支持的最高指令集等级, 全等级会重复编译 9 份 ggml
 flags=" $(grep -m1 '^flags' /proc/cpuinfo) "
 has() { [[ "$flags" == *" $1 "* ]]; }

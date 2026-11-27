@@ -26,11 +26,10 @@ c0ven targets Battlemage. For Alchemist this branch adds:
   the plain kernels on a difference.
 - The two cards' exchanges go through host memory, device -> host -> device by the copy engine. A copy into the other
   card's device memory resets this machine (the Zen 3 data fabric's sync flood); Battlemage keeps its kernel stores.
-- `config.sh` passes `--checkpoints=0 --no-vision`, which fits IQ3_XXS and its DFlash draft layer into 24 GiB of host
-  memory.
+- `config.sh` passes `--no-vision`: the image encoder has no Alchemist build.
 
 ## Results
 
-Two A770s at 2,400 MHz, IQ3_XXS, 32K context, DFlash drafting with the engine's defaults (`draft_max` 7,
-`draft_min_p` 0.5): **PP 268.6 tok/s** (1,374-token prompt) and **TG 25.0 tok/s** (512 tokens), medians of three
-runs from `test.sh`.
+Taken before the switch, with IQ3_XXS at 32K context and `--checkpoints=0`: two A770s at 2,400 MHz, DFlash
+drafting on the engine's defaults (`draft_max` 7, `draft_min_p` 0.5) — **PP 268.6 tok/s** (1,374-token prompt)
+and **TG 25.0 tok/s** (512 tokens), medians of three `test.sh` runs. `test.sh` has not been run on IQ3_S yet.

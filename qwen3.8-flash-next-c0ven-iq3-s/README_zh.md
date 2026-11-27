@@ -25,9 +25,10 @@ c0ven 原本只针对 Battlemage，本分支补上 A770（DG2）所需：
   `gemm_f16` 逐位对拍，不一致就退回普通 kernel。
 - 两张卡之间的 partial 交换全部经 host 内存，由 copy engine 做 device→host→device。直接写对卡显存会让本机
   整机复位（CPU data fabric sync flood）；Battlemage 仍保留 kernel 直写。
-- `config.sh` 传 `--checkpoints=0 --no-vision`，把 IQ3_XXS 和 DFlash 草稿层塞进 24 GiB 主机内存。
+- `config.sh` 传 `--no-vision`：vision 模块没有 Alchemist 版本。
 
 ## 结果
 
-双 A770、2400 MHz、IQ3_XXS、32K context、DFlash 用引擎默认（`draft_max` 7、`draft_min_p` 0.5）：
-**PP 268.6 tok/s**（1374-token 提示）、**TG 25.0 tok/s**（512 token），`test.sh` 三次取中位数。
+换模型前的数据，用 IQ3_XXS、32K context、`--checkpoints=0`：双 A770、2400 MHz、DFlash 用引擎默认
+（`draft_max` 7、`draft_min_p` 0.5）：**PP 268.6 tok/s**（1374-token 提示）、**TG 25.0 tok/s**（512 token），
+`test.sh` 三次取中位数。IQ3_S 还没重测。

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动 c0ven 服务 (Qwen3.8-Flash-Next GSQ-RCO IQ3_XXS, OpenAI + Anthropic 兼容), 参数同 README 的双 B60 启动命令
+# 启动 c0ven 服务 (Qwen3.8-Flash-Next GSQ-RCO IQ3_S, OpenAI + Anthropic 兼容), 参数同 README 的双 B60 启动命令
 # 依赖: ./build.sh 编出的 build/core/libengine.so
 # 用法: ./start.sh
 

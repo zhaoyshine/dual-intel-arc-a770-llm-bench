@@ -7,7 +7,7 @@ URL ?= http://127.0.0.1:8080
 help:
 	@echo "make build          本机编译 c0ven (核心 + kernel + Python 前端)"
 	@echo "make start          启动服务 (127.0.0.1:8080)"
-	@echo "make monitor        终端监控面板, 每 2s 刷新指标 (URL=http://host:port 可改)"
+	@echo "make monitor        终端监控面板, 每 1s 刷新指标 (URL=http://host:port 可改)"
 	@echo "make clean          删除 build/ 和依赖缓存"
 
 build:

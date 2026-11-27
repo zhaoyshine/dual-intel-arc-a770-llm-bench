@@ -13,4 +13,4 @@ Each folder is one model + launcher config; click the readme to see the full rep
 | Qwen3.8 27B | llama.cpp (SYCL layer split / MTP) | Q4_K_M | [en](qwen3.8-27b-llama-cpp-q4-k-m/README.md) / [zh](qwen3.8-27b-llama-cpp-q4-k-m/README_zh.md) |
 | Qwen3.8 27B | vLLM (XPU, self-built) | AWQ-INT4 | [en](qwen3.8-27b-vllm-awq/README.md) / [zh](qwen3.8-27b-vllm-awq/README_zh.md) |
 | Qwen3.8 Flash-Next | Strata (SYCL, self-built) | IQ1_M | [en](qwen3.8-flash-next-strata-coder-iq1-m/README.md) / [zh](qwen3.8-flash-next-strata-coder-iq1-m/README_zh.md) |
-| Qwen3.8 Flash-Next | c0ven (Level Zero, DFlash) | IQ3_XXS | [en](qwen3.8-flash-next-c0ven-iq3-xxs/README.md) / [zh](qwen3.8-flash-next-c0ven-iq3-xxs/README_zh.md) |
+| Qwen3.8 Flash-Next | c0ven (Level Zero, DFlash) | IQ3_S | [en](qwen3.8-flash-next-c0ven-iq3-s/README.md) / [zh](qwen3.8-flash-next-c0ven-iq3-s/README_zh.md) |
