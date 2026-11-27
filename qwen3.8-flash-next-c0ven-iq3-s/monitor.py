@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """c0ven 终端监控, 版式照 Strata 的 Overview: 标题行 + 横线 + 四列信息块 (大数字/副行/sparkline)
-+ 最近请求表, 宽度上限 110 列。速率与比值一律取 /metrics 的 derived/计数, 不按刷新间隔做差。
-用法: monitor.py [URL] [--interval 2]"""
++ 最近请求表, 宽度上限 110 列。速率与比值一律取 /metrics 的 derived/计数 (实时那栏是计数的窗口差分), 不用墙钟差。
+用法: monitor.py [URL] [--interval 1]
+
+刷新方式 (照 Strata: 轮询与绘制分开, 谁都不等谁):
+- /metrics 由后台线程抓, 渲染循环不等网络 (引擎忙时抓取会超过 2s);
+- 整页只在数据/终端尺寸变化时渲染一次, 按键只换切片不重新渲染;
+- 自己画屏 (Painter), 每帧只重画内容变了的行, 所以没有 rich Live 那种 4 次/秒整屏重写。
+两块大屏的大数字是实时速率 (Rates): 最近 3*interval 内的 core 计数器差分, 与平均同口径; 没跑的那一相就是 0。
+"""
 
 from __future__ import annotations
 
@@ -9,8 +16,10 @@ import argparse
 import json
 import os
 import select
+import signal
 import sys
 import termios
+import threading
 import time
 import tty
 import urllib.error
@@ -19,7 +28,6 @@ import urllib.request
 from rich import box
 from rich.cells import cell_len
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.segment import Segment, Segments
 from rich.table import Table
@@ -30,12 +38,52 @@ BLUE = "#5aa9ff"
 AMBER = "#f5c56b"
 RED = "#f28b82"
 MAX_WIDTH = 110
+SCROLL_STEP = 5
 
 STATE_STYLE = {"LIVE": f"bold {ACCENT}", "STALE": f"bold {AMBER}", "DISCONNECTED": f"bold {RED}"}
 
-def fetch(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=2) as resp:
-        return json.loads(resp.read().decode())
+class Poller:
+    """后台抓 /metrics (和一次 /props), 只留最新一份; 抓取慢或超时不影响界面。"""
+
+    def __init__(self, url: str, interval: float) -> None:
+        self.url = url
+        self.interval = interval
+        self.lock = threading.Lock()
+        self._payload: dict | None = None
+        self._model_path: str | None = None
+        self.last_good = 0.0
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _get(self, path: str) -> dict:
+        with urllib.request.urlopen(self.url + path, timeout=2) as resp:
+            return json.loads(resp.read().decode())
+
+    def _run(self) -> None:
+        while True:
+            try:
+                payload = self._get("/metrics")
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                pass
+            else:
+                with self.lock:
+                    if not payload.get("core") and self._payload:
+                        # 引擎在跑长提示时 STATS 会超时 (实测 11s 不答), totals 还活着: 只保住上一份 core
+                        payload = {**payload, "core": self._payload["core"],
+                                   "derived": self._payload.get("derived") or {}}
+                    self._payload = payload
+                    self.last_good = time.monotonic()
+                if self._model_path is None:
+                    try:
+                        self._model_path = self._get("/props").get("model_path")
+                    except Exception:
+                        pass
+            if self._stop.wait(self.interval):
+                return
+
+    def current(self) -> tuple[dict | None, str | None]:
+        with self.lock:
+            return self._payload, self._model_path
 
 
 def num(v: object) -> float:
@@ -106,6 +154,7 @@ class History:
     """最近 16 个样本, 只画 sparkline。"""
 
     KEYS = ("decode_tps", "prompt_tps", "last_decode_tps", "last_prompt_tps",
+            "live_decode_tps", "live_prompt_tps",
             "step_ms", "round_ms", "busy_share", "ngram_hit", "miss_per_row")
     MAX = 16
 
@@ -120,8 +169,47 @@ class History:
         return [sample.get(key) for sample in self.samples]
 
 
+class Rates:
+    """实时速率: 和平均同一口径 (tokens / 卡时), 只是分子分母都取最近 window_s 内的计数器差分
+    (engine_api.h: 读法就是取两次快照做差)。最近两轮没动的那一相直接归 0, 免得相位结束后还挂着旧数。"""
+
+    DECODE_NS = ("step_ns", "round_ns", "lookup_ns")
+    DECODE_TOKENS = ("steps", "rounds", "layer_accepted", "lookup_accepted")
+    COUNTERS = DECODE_NS + DECODE_TOKENS + ("prompt_ns", "prompt_rows")
+
+    def __init__(self, window_s: float) -> None:
+        self.window_s = window_s
+        self.samples: list[tuple[float, dict]] = []
+        self.decode = 0.0
+        self.prompt = 0.0
+
+    def add(self, core: dict, now: float) -> None:
+        sample = {key: num(core.get(key)) for key in self.COUNTERS}
+        self.samples = [(t, s) for t, s in self.samples if now - t <= self.window_s]
+        first = self.samples[0][1] if self.samples else sample
+        delta = {key: sample[key] - first[key] for key in self.COUNTERS}
+        if any(value < 0 for value in delta.values()):
+            self.samples, first = [(now, sample)], sample       # 引擎重启, 计数器回到小值
+            delta = dict.fromkeys(self.COUNTERS, 0.0)
+        else:
+            self.samples.append((now, sample))
+        prev = self.samples[-3][1] if len(self.samples) > 2 else first
+        fresh = {key: sample[key] - prev[key] for key in self.COUNTERS}
+        self.decode = self._rate(delta, fresh, self.DECODE_NS, self.DECODE_TOKENS)
+        self.prompt = self._rate(delta, fresh, ("prompt_ns",), ("prompt_rows",))
+
+    @staticmethod
+    def _rate(delta: dict, fresh: dict, ns_keys: tuple, tok_keys: tuple) -> float:
+        ns = sum(delta[key] for key in ns_keys)
+        if ns <= 0 or sum(fresh[key] for key in ns_keys) <= 0:
+            return 0.0
+        return sum(delta[key] for key in tok_keys) / ns * 1e9
+
+
 class RecentLog:
-    """API 的 recent 只返回最后 12 条; 每轮和本地已有记录对齐后追加, 不设上限。"""
+    """API 的 recent 只返回最后 12 条; 每轮和本地已有记录对齐后追加, 最多留 30 条。"""
+
+    MAX = 30
 
     def __init__(self) -> None:
         self.items: list[dict] = []
@@ -133,6 +221,7 @@ class RecentLog:
         while k > 0 and self.items[-k:] != list(incoming[:k]):
             k -= 1
         self.items.extend(incoming[k:])
+        del self.items[: -self.MAX]
 
 
 def spark(values: list, width: int, color: str = ACCENT) -> Text:
@@ -316,16 +405,18 @@ def tiles(m: dict, live: dict, hist: History, core: dict, eng: dict, width: int,
     for _ in range(2):
         hero.add_column(ratio=1)
     hero.add_row(
-        speed_tile("提示速度 tok/s（上一条请求）", big_rate(live.get("last_prompt_tps"), BLUE),
-                   kv("平均 ", fnum(live.get("prompt_tps"), 1) + " tok/s"),
+        speed_tile("提示速度 tok/s（实时）", big_rate(live.get("live_prompt_tps"), BLUE),
+                   Text.assemble(kv("上一条 ", fnum(live.get('last_prompt_tps'), 1)),
+                                 kv(" tok/s · 平均 ", fnum(live.get('prompt_tps'), 1) + " tok/s")),
                    Text.assemble(kv("分块 ", fnum(opt(core.get('chunk_ms')), 0, ' ms')),
                                  kv(" · 每行 ", ms(opt(core.get('row_ms'))))),
-                   spark(hist.values("last_prompt_tps"), block_w - 6, BLUE)),
-        speed_tile("解码速度 tok/s（上一条请求）", big_rate(live.get("last_decode_tps")),
-                   kv("平均 ", fnum(live.get("decode_tps"), 1) + " tok/s"),
+                   spark(hist.values("live_prompt_tps"), block_w - 6, BLUE)),
+        speed_tile("解码速度 tok/s（实时）", big_rate(live.get("live_decode_tps")),
+                   Text.assemble(kv("上一条 ", fnum(live.get('last_decode_tps'), 1)),
+                                 kv(" tok/s · 平均 ", fnum(live.get('decode_tps'), 1) + " tok/s")),
                    Text.assemble(kv("普通步 ", fnum(live.get('step_tps'), 0) + " tok/s"),
                                  kv(" · 草稿轮 ", fnum(live.get('layer_tps'), 0) + " tok/s")),
-                   spark(hist.values("last_decode_tps"), block_w - 6)),
+                   spark(hist.values("live_decode_tps"), block_w - 6)),
     )
 
     grid = Table.grid(padding=(0, 1), expand=True)
@@ -536,7 +627,8 @@ def recent_table(recent: list, width: int) -> Panel:
 
 
 def hint(interval: float) -> Text:
-    return Text(f"↑↓ PgUp/PgDn 滚动整页   g/G 到顶/到底   Ctrl+C 退出   · 每 {interval:g}s 刷新", style="dim")
+    return Text(f"↑↓ {SCROLL_STEP} 行   PgUp/PgDn 整页   g/G 到顶/到底   Ctrl+C 退出   · 每 {interval:g}s 刷新",
+                style="dim")
 
 
 def render(m: dict, live: dict, hist: History, state: str, model_path: str | None,
@@ -559,18 +651,49 @@ def render(m: dict, live: dict, hist: History, state: str, model_path: str | Non
                  hardware, *blank, hint(interval))
 
 
-def page(console: Console, group: Group, offset: int | None) -> tuple[Segments, int, int]:
-    """整页渲染成行, 取屏幕高度的一段; offset 是距底部的行数 (0 = 跟随最新)。"""
-    lines = console.render_lines(group, console.options, pad=False)
-    height = max(1, console.size.height)
-    max_off = max(0, len(lines) - height)
-    offset = max_off if offset is None else max(0, min(offset, max_off))
-    start = max(0, len(lines) - height - offset)
-    segs: list[Segment] = []
-    for line in lines[start:start + height]:
-        segs.extend(line)
-        segs.append(Segment.line())
-    return Segments(segs), offset, max_off
+class Painter:
+    """自己画屏: doc 是已经渲染好的整页行, 每帧只重写内容和上屏不同的行, 滚动只换切片。
+    行首带绝对定位, 所以不依赖游标状态; 终端尺寸一变就整屏重画。"""
+
+    def __init__(self, console: Console) -> None:
+        self.console = console
+        self.rows: list = []
+        self.size: tuple[int, int] | None = None
+        self.active = False
+
+    def __enter__(self) -> "Painter":
+        if not self.console.is_terminal:
+            raise SystemExit("monitor 需要终端")
+        self.active = self.console.set_alt_screen(True)
+        self.console.show_cursor(False)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.active:
+            self.console.show_cursor(True)
+            self.console.set_alt_screen(False)
+
+    def show(self, doc: list, offset: int | None) -> tuple[int, int]:
+        """offset 是距底部的行数 (None = 停在页顶); 返回落定后的 offset 和可滚行数。"""
+        size = self.console.size
+        height = max(1, size.height)
+        buf: list = []
+        if size != self.size:
+            self.rows, self.size = [None] * height, size
+            buf.append(Segment("\x1b[2J"))
+        max_off = max(0, len(doc) - height)
+        offset = max_off if offset is None else max(0, min(offset, max_off))
+        start = max(0, len(doc) - height - offset)
+        for row in range(height):
+            want = doc[start + row] if start + row < len(doc) else []
+            if self.rows[row] == want:
+                continue
+            buf.append(Segment(f"\x1b[{row + 1};1H\x1b[0m\x1b[K"))
+            buf.extend(want)
+            self.rows[row] = want
+        if buf:
+            self.console.print(Segments(buf), end="", crop=False)
+        return offset, max_off
 
 
 class Keys:
@@ -623,9 +746,9 @@ class Keys:
     @staticmethod
     def scroll(offset: int, key: str, total: int, visible: int) -> int:
         if key == "up":
-            offset += 1
+            offset += SCROLL_STEP
         elif key == "down":
-            offset -= 1
+            offset -= SCROLL_STEP
         elif key == "pgup":
             offset += visible
         elif key == "pgdn":
@@ -638,71 +761,62 @@ class Keys:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="monitor", description="c0ven 终端监控, 每 2s 刷新")
+    p = argparse.ArgumentParser(prog="monitor", description="c0ven 终端监控, 每 1s 刷新")
     p.add_argument("url", nargs="?", default="http://127.0.0.1:8080")
-    p.add_argument("--interval", type=float, default=2.0)
+    p.add_argument("--interval", type=float, default=1.0)
     args = p.parse_args()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     console = Console()
     hist = History()
     log = RecentLog()
-    last_good = 0.0
-    model_path: str | None = None
+    rates = Rates(3 * args.interval)
+    poller = Poller(args.url, args.interval)
     live: dict = {}
-    prev: dict = {}
+    model_path: str | None = None
     offset: int | None = None
+    doc: list | None = None
+    doc_raw: dict | None = None
+    doc_state: str | None = None
+    doc_size = (0, 0)
 
-    with Live(Group(header(args.url, "DISCONNECTED", None, {}, 0.0, {}, MAX_WIDTH),
-                    Text("连接中…", style="dim")), console=console, screen=True,
-              refresh_per_second=4) as live_view, Keys() as keys:
+    with Painter(console) as paint, Keys() as keys:
         while True:
             t0 = time.monotonic()
-            m: dict | None = None
-            try:
-                m = fetch(args.url + "/metrics")
-                if model_path is None:
-                    try:
-                        model_path = fetch(args.url + "/props").get("model_path")
-                    except Exception:
-                        pass
-                last_good = time.monotonic()
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-                pass
-
-            if m is not None:
-                live = api_values(m)
+            raw, path = poller.current()
+            model_path = path or model_path
+            if raw is not None and raw != doc_raw:
+                live = api_values(raw)
+                rates.add(raw.get("core") or {}, time.monotonic())
+                live["live_prompt_tps"] = rates.prompt
+                live["live_decode_tps"] = rates.decode
                 hist.add(live)
-                log.update(m.get("recent", []))
+                log.update(raw.get("recent") or [])
                 state = "LIVE"
             else:
-                state = "STALE" if last_good and (time.monotonic() - last_good) < 30 else "DISCONNECTED"
-                m = prev
-            m = {**m, "recent": log.items}
-            prev = m
-            group: Group = (render(m, live, hist, state, model_path, args.url, args.interval,
-                                   min(console.size.width, MAX_WIDTH)) if m.get("core") else
-                            Group(header(args.url, state, model_path, {}, 0.0, live, MAX_WIDTH),
-                                  Text("没有数据, 等下一次刷新…", style="dim")))
-            view, offset, max_off = page(console, group, offset)
-            pressed = keys.read()
-            if pressed:
-                for key in pressed:
-                    offset = Keys.scroll(offset, key, max_off, console.size.height)
-                view, offset, max_off = page(console, group, offset)
-            live_view.update(view)
+                good = poller.last_good
+                state = ("STALE" if good and (time.monotonic() - good) < 30 else "DISCONNECTED")
+            size = console.size
+            if doc is None or raw != doc_raw or state != doc_state or size != doc_size:
+                width = min(size.width, MAX_WIDTH)
+                group: Group = (
+                    render({**raw, "recent": log.items}, live, hist, state, model_path, args.url,
+                           args.interval, width)
+                    if raw and raw.get("core") else
+                    Group(header(args.url, state, model_path, {}, 0.0, live, width),
+                          Text("没有数据, 等下一次刷新…", style="dim")))
+                doc = console.render_lines(group, console.options, pad=False)
+                doc_raw, doc_state, doc_size = raw, state, size
+            _, max_off = paint.show(doc, offset)
 
             deadline = t0 + args.interval
             while (left := deadline - time.monotonic()) > 0:
-                time.sleep(min(0.1, left))
-                pressed = keys.read()
-                if not pressed:
-                    continue
-                before = offset
-                for key in pressed:
-                    offset = Keys.scroll(offset, key, max_off, console.size.height)
-                if offset != before:
-                    view, offset, max_off = page(console, group, offset)
-                    live_view.update(view)
+                time.sleep(min(0.05, left))
+                if console.size != doc_size:
+                    break
+                for key in keys.read():
+                    base = max_off if offset is None else offset
+                    offset, max_off = paint.show(doc, Keys.scroll(base, key, max_off, doc_size[1]))
 
 
 if __name__ == "__main__":
