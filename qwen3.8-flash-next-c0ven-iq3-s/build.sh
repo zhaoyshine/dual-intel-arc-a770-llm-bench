@@ -16,22 +16,21 @@ case "${1:-}" in
 esac
 
 [[ -f "$C0VEN_DIR/CMakeLists.txt" ]] || err "找不到 c0ven 源码 $C0VEN_DIR"
-[[ -f /usr/include/level_zero/ze_api.h ]] ||
-    err "缺 ze_api.h, 安装: sudo dnf install level-zero-devel"
+pkg-config --exists level-zero ||
+    err "缺 level-zero 开发包, 安装: sudo dnf install oneapi-level-zero-devel"
+# 换过 c0ven 源码目录后旧 build/ 的 CMakeCache 不可复用, cmake 会拒绝重配
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    home="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$BUILD_DIR/CMakeCache.txt" | head -1)"
+    [[ "$home" = "$C0VEN_DIR" ]] || err "$BUILD_DIR 是 $home 的编译产物 (先 rm -rf $BUILD_DIR)"
+fi
 command -v ocloc >/dev/null || err "缺 ocloc, 安装: sudo dnf install intel-ocloc"
 [[ -f "$MODEL_FILE" ]] || err "找不到模型 $MODEL_FILE"
 
-# ggml 取自 llama.cpp 的固定 commit, 解包到 opt/llama.cpp (与官方镜像的 /opt/llama.cpp 对齐)
+# ggml 直接用 opt/llama.cpp, 它的 commit 必须等于 LLAMA_COMMIT; 不再从外部仓库解包
 ggml_dir="$LLAMA_CPP_DIR"
-if [[ "$(cat "$ggml_dir/.c0ven-commit" 2>/dev/null)" != "$LLAMA_COMMIT" ]]; then
-    git -C "$LLAMA_REPO" cat-file -e "$LLAMA_COMMIT^{commit}" 2>/dev/null ||
-        err "$LLAMA_REPO 里没有 commit $LLAMA_COMMIT (先 git fetch)"
-    echo "== 解包 llama.cpp@${LLAMA_COMMIT:0:8} 到 $ggml_dir =="
-    rm -rf "$ggml_dir"
-    mkdir -p "$ggml_dir"
-    git -C "$LLAMA_REPO" archive "$LLAMA_COMMIT" | tar -x -C "$ggml_dir"
-    echo "$LLAMA_COMMIT" > "$ggml_dir/.c0ven-commit"
-fi
+[[ -d "$ggml_dir/ggml" ]] || err "找不到 ggml 源码 $ggml_dir/ggml"
+[[ "$(cat "$ggml_dir/.c0ven-commit" 2>/dev/null)" = "$LLAMA_COMMIT" ]] ||
+    err "$ggml_dir 不是 llama.cpp@${LLAMA_COMMIT:0:8} (换版本后重写 $ggml_dir/.c0ven-commit)"
 
 # pyproject 要求 uv 版本精确匹配, 系统 uv 版本不同时装一份到本目录
 uv="$(command -v uv || true)"
@@ -44,7 +43,7 @@ if [[ -z "$uv" || "$("$uv" --version)" != "uv 0.12.22"* ]]; then
     uv="$UV_DIR/bin/uv"
 fi
 
-# .python-version 钉 3.14.4, 本机只有 3.14.8, 直接指定解释器, 不让 uv 下载 Python
+# .python-version 钉 3.14.4 (requires-python >=3.14.4,<3.15), 本机只有 3.14.10, 直接指定解释器, 不让 uv 下载 Python
 py="$(command -v python3.14 || true)"
 [[ -n "$py" ]] || err "缺 python3.14"
 echo "== uv sync -> $VENV =="
@@ -83,9 +82,7 @@ cmake -S "$C0VEN_DIR" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DENGINE_GGML_DIR="$ggml_dir" \
     -DENGINE_CPU_LEVELS="$levels" \
-    -DENGINE_AOT_DEVICES="$AOT_DEVICES" \
-    -DENGINE_DG2_DEVICES="$DG2_DEVICES" \
-    -DENGINE_KERNEL_SPIRV_DEVICE="$SPIRV_DEVICE"
+    -DENGINE_AOT_DEVICES="$AOT_DEVICES"
 
 echo "== build c0ven =="
 cmake --build "$BUILD_DIR"

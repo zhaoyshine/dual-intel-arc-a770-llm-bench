@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动 c0ven 服务 (Qwen3.8-Flash-Next GSQ-RCO IQ3_S, OpenAI + Anthropic 兼容), 参数同 README 的双 B60 启动命令
+# 启动 c0ven 服务 (Qwen3.8-Flash-Next GSQ-RCO IQ3_S, OpenAI + Anthropic 兼容)
 # 依赖: ./build.sh 编出的 build/core/libengine.so
 # 用法: ./start.sh
 
@@ -19,11 +19,10 @@ mkdir -p "$ENGINE_CACHE_DIR"
 # ADR-0002 的环境: 设备 0 固定为 PCI 地址低的卡; sysman 读每卡剩余显存
 export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
 export ZES_ENABLE_SYSMAN=1
-[[ -n "$ZE_AFFINITY_MASK" ]] && export ZE_AFFINITY_MASK
-
 export ENGINE_LIBRARY="$BUILD_DIR/core/libengine.so"
 export ENGINE_CACHE_DIR
 export PYTHONPATH="$C0VEN_DIR"
+export ENGINE_NO_P2P=1
 
 cd "$C0VEN_DIR"
 exec "$VENV/bin/python" -m frontend \
