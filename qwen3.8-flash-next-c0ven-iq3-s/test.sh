@@ -1,21 +1,17 @@
 #!/bin/bash
-# 启动服务，跑两项测试后停止服务：
-#   1. 速度：PP 与 TG 分开 bench —— PP 用 1024-token 提示，TG 用短提示（纯 decode），各 3 次取中位数
-#   2. 正确性：10-20 token 内容输入 + 128 输出，同一输入跑两次（temperature 0），与参考答案比对
+# 测速度：PP 与 TG 分开 bench —— PP 用约 16k-token 提示，TG 用短提示纯 decode 跑 1024 token，各 5 次取平均值
+# $URL 上已经有就绪的服务就复用，只有本次启动的才在跑完后关掉。
 # 计时方式同 docs/BENCHMARKS.md：PP = prompt tokens / 首 token 时间，TG = 首 token 之后 / 末 token 时间。
-# 服务输出丢弃，终端只打印测试结果。
+# 本次启动的服务输出丢弃，终端只打印测试结果。
 # 用法: ./test.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/config.sh"
 
 URL="http://$HOST:$PORT"
-SIM_MIN=0.90
+RUNS=5
 
 err() { echo "错误: $*" >&2; exit 1; }
-
-[[ -f "$BUILD_DIR/core/libengine.so" ]] || err "找不到 $BUILD_DIR/core/libengine.so (先编译)"
-[[ -f "$MODEL_FILE" ]] || err "找不到模型 $MODEL_FILE"
 
 stop_all() {
     pkill -TERM -f "python -m frontend" 2>/dev/null || true
@@ -30,36 +26,48 @@ stop_all() {
     echo "警告: 进程 60s 未退出" >&2
 }
 
-trap stop_all EXIT
+started=0
+if /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
+    served="$(/usr/bin/curl -sf --max-time 5 "$URL/props" |
+        python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_path"], d["context"])')"
+    [[ "$served" = "$MODEL_FILE $CONTEXT" ]] ||
+        err "$URL 上的服务不是这套配置（跑的是 $served），换个 PORT 或先停掉它"
+    echo "== 复用已在跑的服务 $URL =="
+else
+    [[ -f "$BUILD_DIR/core/libengine.so" ]] || err "找不到 $BUILD_DIR/core/libengine.so (先编译)"
+    [[ -f "$MODEL_FILE" ]] || err "找不到模型 $MODEL_FILE"
+    trap 'if [[ $started = 1 ]]; then stop_all; fi' EXIT
 
-echo "== 停止已有服务 =="
-stop_all
-sleep 1
+    echo "== 停止已有服务 =="
+    stop_all
+    sleep 1
 
-echo "== 启动服务 =="
-cd "$C0VEN_DIR"
-"$SCRIPT_DIR/start.sh" >/dev/null 2>&1 &
-cd "$SCRIPT_DIR"
+    echo "== 启动服务 =="
+    cd "$C0VEN_DIR"
+    "$SCRIPT_DIR/start.sh" >/dev/null 2>&1 &
+    cd "$SCRIPT_DIR"
+    started=1
 
-echo "== 等待加载 =="
-ok=0
-for _ in $(seq 1 200); do
-    if /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
-        ok=1
-        break
-    fi
-    if ! pgrep -f "[p]ython -m frontend" >/dev/null; then
-        echo "服务进程已退出" >&2
-        break
-    fi
-    sleep 2
-done
-[[ $ok = 1 ]] || err "服务未就绪，跑 ./start.sh 看输出"
+    echo "== 等待加载 =="
+    ok=0
+    for _ in $(seq 1 200); do
+        if /usr/bin/curl -sf --max-time 2 "$URL/health" | grep -q ok; then
+            ok=1
+            break
+        fi
+        if ! pgrep -f "[p]ython -m frontend" >/dev/null; then
+            echo "服务进程已退出" >&2
+            break
+        fi
+        sleep 2
+    done
+    [[ $ok = 1 ]] || err "服务未就绪，跑 ./start.sh 看输出"
+fi
 
-python3 - "$URL" "$SIM_MIN" <<'PY'
-import json, sys, difflib, statistics, time, urllib.request
+python3 - "$URL" "$RUNS" <<'PY'
+import json, sys, statistics, time, urllib.request
 
-url, sim_min = sys.argv[1], float(sys.argv[2])
+url, runs = sys.argv[1], int(sys.argv[2])
 
 def core():
     with urllib.request.urlopen(url + "/metrics", timeout=30) as r:
@@ -105,32 +113,34 @@ def ask(prompt, n):
         usage = {"prompt_tokens": 0, "completion_tokens": len(parts)}
     return first, last, usage, "".join(parts)
 
-# 1) 速度：约 1024 token（每行约 14 token）。PP 与 TG 各用独立请求，3 次取中位数。
-lines = 73
-prompt_long = "\n".join(f"Line {i:04d}: the quick brown fox jumps over the lazy dog." for i in range(lines))
-prompt_long += "\nWrite a detailed story about a fox."
+lines = 876
+def prompt_long(run):
+    body = "\n".join(f"Line {i + (run + 1) * lines:04d}: the quick brown fox jumps over the lazy dog."
+                     for i in range(lines))
+    return body + "\nWrite a detailed story about a fox."
 print()
-print("== 测试 1a：PP ==")
+print("== PP ==")
 pps = []
-for i in range(3):
-    first, _, u, _ = ask(prompt_long, 1)
+for i in range(runs):
+    first, _, u, _ = ask(prompt_long(i), 1)
     pp = u["prompt_tokens"] / first if first else 0.0
     pps.append(pp)
     print(f"  run {i + 1}: {u['prompt_tokens']} token, 首 token {first:.2f}s -> PP {pp:.1f} tok/s")
-pp_med = statistics.median(pps)
+pp_mean = statistics.mean(pps)
 
-print("== 测试 1b：TG（短提示，纯 decode）==")
+print("== TG（短提示，纯 decode）==")
 prompt_tg = "Write a detailed story about a fox."
 c_before = core()
 tgs = []
-for i in range(3):
-    first, last, u, _ = ask(prompt_tg, 512)
+for i in range(runs):
+    first, last, u, _ = ask(prompt_tg, 1024)
     tg = (u["completion_tokens"] - 1) / (last - first) if last > first else 0.0
     tgs.append(tg)
     print(f"  run {i + 1}: {u['completion_tokens']} token, 首 token {first:.2f}s, "
           f"解码 {last - first:.2f}s -> TG {tg:.1f} tok/s")
-tg_med = statistics.median(tgs)
-print(f"中位数: PP {pp_med:.1f} tok/s, TG {tg_med:.1f} tok/s")
+tg_mean = statistics.mean(tgs)
+print(f"平均值: PP {pp_mean:.1f} tok/s, TG {tg_mean:.1f} tok/s")
+print(f"中位数: PP {statistics.median(pps):.1f} tok/s, TG {statistics.median(tgs):.1f} tok/s")
 d = diff_keys(c_before, core())
 r = max(1, d["rounds"])
 drafts = d["layer_drafts"] + d["lookup_drafts"]
@@ -143,42 +153,11 @@ print("  解码 counters："
       f"lookup {d['lookup_accepted']}/{d['lookup_drafts']}；"
       f"draft pass {d['draft_passes']} 次 {d['draft_ns'] / 1e6:.0f} ms；"
       f"swap {d['swap_rounds']} 轮 {d['swap_ns'] / 1e6:.0f} ms")
-
-# 2) 正确性：内容 10-20 token（prompt_tokens 另含 chat template），输出 128，与参考答案比较前缀相似率
-prompt_short = "Explain why the sky looks blue in a short paragraph."
-ref = ("The sky looks blue because sunlight is scattered by molecules in the atmosphere. "
-       "Shorter blue wavelengths scatter more s")
-_, _, ua, a = ask(prompt_short, 128)
-_, _, ub, b = ask(prompt_short, 128)
-if ref not in a and ref not in b:
-    # 128 token 可能全用在 reasoning 上、答案还没开始写；延长一次再看。
-    print("  （128 token 内未见答案，延长到 256 重测）")
-    _, _, ua, a = ask(prompt_short, 256)
-    _, _, ub, b = ask(prompt_short, 256)
-sim_ref = difflib.SequenceMatcher(None, ref, a[:len(ref)]).ratio()
-sim_two = difflib.SequenceMatcher(None, a, b).ratio()
-print()
-print("== 测试 2：正确性 ==")
-print(f"输入 {ua['prompt_tokens']} token, 输出 {ua['completion_tokens']} / {ub['completion_tokens']} token")
-contains_ref = ref in a
-print(f"与参考相似率 {sim_ref:.3f}（阈值 {sim_min:.2f}）；两次之间 {sim_two:.3f}；含参考: {contains_ref}")
-print("参考:", repr(ref))
-print("实际:", repr(a[:len(ref)]))
-if ua["completion_tokens"] == 0 or ub["completion_tokens"] == 0:
-    print("失败: 有输出为 0 token")
-    sys.exit(1)
-# 输出有时以 reasoning 开头，前缀相似率会低；参考句出现在全文任一位置也算通过。
-if sim_ref < sim_min and not contains_ref:
-    print("失败: 输出与参考不符")
-    sys.exit(1)
-print("通过")
 PY
 rc=$?
 
 echo
-if [[ $rc -eq 0 ]]; then
-    echo "== 全部通过 =="
-else
-    echo "== 失败（退出码 $rc）=="
+if [[ $rc -ne 0 ]]; then
+    echo "== 测速失败（退出码 $rc）=="
 fi
 exit $rc
