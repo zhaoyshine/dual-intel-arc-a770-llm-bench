@@ -2,33 +2,35 @@
 
 [English](README.md)
 
-c0ven 官方只发 Docker 镜像，这里把它的构建步骤搬到本机 Fedora：源码取自 `~/workspace/ai/c0ven`（分支
-`dg2-a770`），ggml 固定在 `opt/llama.cpp`（llama.cpp@3cf03257，与官方镜像一致），Python 依赖用 uv 0.12.22
-装进本目录 `.venv`。
+c0ven 官方只发 Docker 镜像，这里把它的构建步骤搬到本机 Fedora：源码在本目录 `opt/c0ven`（这份 checkout 的版本由你
+自己管理），ggml 用 `opt/llama.cpp`，`build.sh` 校验 `opt/llama.cpp/.c0ven-commit` 等于钉死的 `LLAMA_COMMIT`
+（llama.cpp@3cf03257，与官方镜像一致）；Python 依赖用 uv 0.12.22 装进本目录 `.venv`。
 
 ## 使用
 
 ```bash
 ./build.sh    # 编译，产物在 build/，AOT kernel 目标 acm-g10
 ./start.sh    # 启动服务 (127.0.0.1:8080)
-./test.sh     # 测 PP、TG 和正确性
+./test.sh     # 测 PP、TG，并打解码 counters
 ```
 
-系统依赖：`level-zero-devel`、`intel-ocloc`（本机 26.35，c0ven 钉 26.40）、python3.14。
+系统依赖：`oneapi-level-zero-devel`、`intel-ocloc`（本机 26.35，c0ven 钉 26.40）、python3.14。
 
-## 为 Alchemist 做的改动
+## Xe-HPG 需要的是什么
 
-c0ven 原本只针对 Battlemage，本分支补上 A770（DG2）所需：
+opt/c0ven 自带 Alchemist 支持（ADR-0082）：`ENGINE_AOT_DEVICES` 默认含 `acm-g10`、`acm-g11`、`acm-g12`，
+`gemm_hpg.cl`、`prompt_attn_hpg.cl`、`vision_attn_hpg.cl` 是 8-lane XMX 的版本，`ze::Card::is_hpg()` 切换运行时路径
+——decode 命令表按 host event 切分（不再让 EU 轮询 host flag）、写过的 staging 区间做 cache line flush、prompt
+staging 走 CPU 映射的 1D 拷贝（不再用 2D arena 拷贝）。跨卡 peer access 不可用时退回 pinned host 内存（ADR-0080）。
 
-- `kernels/gemm_big.cl`、`kernels/pack.cl`：prompt 路径的 dense 矩阵乘走 XMX，操作数按 DPAS 布局打包，
-  work-group tile 128×128，SLM 双缓冲。N 和 rows 任意（epilogue 掩掉尾部）；加载时自检拿 big tile 与
-  `gemm_f16` 逐位对拍，不一致就退回普通 kernel。
-- 两张卡之间的 partial 交换全部经 host 内存，由 copy engine 做 device→host→device。直接写对卡显存会让本机
-  整机复位（CPU data fabric sync flood）；Battlemage 仍保留 kernel 直写。
-- `config.sh` 传 `--no-vision`：vision 模块没有 Alchemist 版本。
+`start.sh` 设 `ENGINE_NO_P2P=1`，core 因此跳过 peer 探测：本机 Zen 桥的 `zeDeviceCanAccessPeer` 为真，探测里的
+copy-engine BAR-to-BAR 传输会让整机复位。
+
+`config.sh` 传 `--no-vision`：vision 模块有 Alchemist 版本，模型目录里没有 `mmproj-*.gguf`。
 
 ## 结果
 
-换模型前的数据，用 IQ3_XXS、32K context、`--checkpoints=0`：双 A770、2400 MHz、DFlash 用引擎默认
-（`draft_max` 7、`draft_min_p` 0.5）：**PP 268.6 tok/s**（1374-token 提示）、**TG 25.0 tok/s**（512 token），
-`test.sh` 三次取中位数。IQ3_S 还没重测。
+IQ3_S、200K context、`--checkpoints=32`、`--table-cache`，`test.sh` 五次取平均：**PP 395.6 tok/s**（15828-token 提示，
+首 token 39.88-40.31s，五次 392.6-396.9 tok/s，中位数 395.9）、**TG 23.0 tok/s**（短提示、1024 token，五次
+21.4-25.1 tok/s，中位数 22.5）。解码 counters：1913 round，每 round 3.24 行、82.5 ms、产出 2.32 token；drafts 4282、
+accepted 2532（59.1%），lookup 一次没生成，draft 全来自 DFlash；draft pass 2585 次 25.9s，swap 608 轮 10.1s。
