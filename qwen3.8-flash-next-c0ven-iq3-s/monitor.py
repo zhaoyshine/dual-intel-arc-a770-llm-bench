@@ -50,7 +50,8 @@ class Poller:
         self.interval = interval
         self.lock = threading.Lock()
         self._payload: dict | None = None
-        self._model_path: str | None = None
+        self._props: dict | None = None
+        self._model_id: str | None = None
         self.last_good = 0.0
         self._stop = threading.Event()
         threading.Thread(target=self._run, daemon=True).start()
@@ -73,17 +74,18 @@ class Poller:
                                    "derived": self._payload.get("derived") or {}}
                     self._payload = payload
                     self.last_good = time.monotonic()
-                if self._model_path is None:
+                if self._props is None:
                     try:
-                        self._model_path = self._get("/props").get("model_path")
+                        self._props = self._get("/props")
+                        self._model_id = ((self._get("/v1/models").get("data") or [{}])[0]).get("id")
                     except Exception:
                         pass
             if self._stop.wait(self.interval):
                 return
 
-    def current(self) -> tuple[dict | None, str | None]:
+    def current(self) -> tuple[dict | None, dict | None, str | None]:
         with self.lock:
-            return self._payload, self._model_path
+            return self._payload, self._props, self._model_id
 
 
 def num(v: object) -> float:
@@ -238,16 +240,6 @@ def spark(values: list, width: int, color: str = ACCENT) -> Text:
     return Text(" " * (width - len(vals)) + body, style=color)
 
 
-def span(values: list, digits: int = 1) -> str:
-    """最近样本的最小-最大值, 没有两个样本时返回 --。"""
-    valid = [v for v in values if v is not None]
-    if len(valid) < 2:
-        return "--"
-    lo, hi = min(valid), max(valid)
-    a, b = f"{lo:,.{digits}f}", f"{hi:,.{digits}f}"
-    return a if a == b else f"{a}-{b}"
-
-
 def bar(frac: float | None, width: int, color: str = ACCENT) -> Text:
     if frac is None:
         return Text("░" * width, style="dim")
@@ -339,22 +331,74 @@ def tile(title: str, big: str, sub: str | Text, series: Text, width: int | None 
 
 def phase(live: dict, state: str) -> tuple[str, str]:
     if state != "LIVE":
-        return "离线", f"bold {RED}"
+        return "offline", f"bold {RED}"
     if live.get("writing"):
-        return "解码", f"bold {ACCENT}"
+        return "decoding", f"bold {ACCENT}"
     if live.get("reading"):
-        return "读提示", f"bold {BLUE}"
+        return "prefilling", f"bold {BLUE}"
     if live.get("busy"):
-        return "排队", f"bold {AMBER}"
-    return "空闲", "dim"
+        return "queued", f"bold {AMBER}"
+    return "idle", "dim"
 
 
-def header(url: str, state: str, model_path: str | None, eng: dict, up_s: float,
-           live: dict, width: int, show_info: bool = True, extra: str = "") -> Group:
+def sampling(props: dict | None) -> str:
+    """模型自带的采样默认值 (/props 的 generation_settings), 缺的字段不写。"""
+    gen = (props or {}).get("generation_settings") or {}
+    pairs = (
+        ("temp", f"{num(gen['temperature']):.2f}" if "temperature" in gen else ""),
+        ("top_p", f"{num(gen['top_p']):.3f}" if "top_p" in gen else ""),
+        ("top_k", f"{n(gen['top_k'])}" if "top_k" in gen else ""),
+        ("max", f"{n(gen['max_tokens']):,}" if gen.get("max_tokens")
+                else "unset" if "max_tokens" in gen else ""),
+    )
+    return " · ".join(f"{name} {value}" for name, value in pairs if value)
+
+
+def model_panel(props: dict | None, name: str | None, eng: dict, up_s: float, width: int) -> Panel:
+    """模型与生成配置 (/props, /v1/models), 版式同 Hardware。"""
+    t = Table.grid(padding=(0, 2))
+    t.add_column(width=8)
+    t.add_column()
+
+    def row(label: str, *parts) -> None:
+        t.add_row(Text(label, style="dim"), Text.assemble(*parts))
+
+    dot = Text(" · ", style="dim")
+    path = (props or {}).get("model_path") or ""
+    template = (props or {}).get("chat_template") or ""
+    folder = os.path.basename(os.path.dirname(path)) if path else ""
+
+    parts = [Text(name or os.path.basename(path) or "—", style="default")]
+    if folder:
+        parts += [dot, Text(folder, style="default")]
+    if "-of-" in path:  # 分片名形如 -00001-of-00002.gguf
+        index, total = path.rsplit("-of-", 1)
+        try:
+            parts += [dot, kv("shard ", f"{int(index.rsplit('-', 1)[-1])}/{int(total.split('.')[0])}")]
+        except ValueError:
+            pass
+    row("Model", *parts)
+    row("Path", Text(path or "—", style="dim", no_wrap=True, overflow="crop"))
+    row("Engine", Text(str(eng.get("arch") or "—")), dot, Text(str(eng.get("backend") or "—")), dot,
+        Text(str(eng.get("version") or "—")), dot, kv("context ", f"{n(eng.get('max_context')):,} tok"), dot,
+        kv("", f"{n(eng.get('slots'))} slot"), dot, kv("", f"{n(eng.get('cards'))} cards"))
+    row("Sampling", Text(sampling(props) or "—"))
+    vision = n(eng.get("image_tokens_max"))
+    row("MoE", kv("experts ", f"{n(eng.get('experts_planned'))} planned / {n(eng.get('experts_cached'))} cached"), dot,
+        kv("pages ", f"{n(eng.get('pages')):,}"), dot,
+        kv("vision ", f"up to {vision:,} tok" if vision else "off"))
+    switches = [w for w in ("enable_thinking", "reasoning_effort", "preserve_thinking") if w in template]
+    row("Template", kv("chars ", f"{len(template):,}") if template else Text("—"),
+        *(p for w in switches for p in (dot, Text(w, style="default"))))
+    row("Runtime", kv("pid ", f"{n(eng.get('pid')):,}"), dot, kv("up ", f"{up_s:,.0f}s"))
+    return Panel(t, title=Text("Model", style="dim"), title_align="left", border_style="dim",
+                 box=box.ROUNDED, width=width, padding=(0, 1))
+
+
+def header(url: str, state: str, live: dict, width: int) -> Group:
     left = Text(no_wrap=True, overflow="crop")
-    left.append("C0VEN 总览", style=f"bold {ACCENT}")
+    left.append("C0VEN OVERVIEW", style=f"bold {ACCENT}")
     left.append("   " + url, style=ACCENT)
-    left.append("   " + os.path.basename(model_path or ""), style="bold")
     label, style = phase(live, state)
     right = Text(no_wrap=True)
     right.append("● " + label, style=style)
@@ -362,12 +406,7 @@ def header(url: str, state: str, model_path: str | None, eng: dict, up_s: float,
     right.append(f"[{state}]", style=STATE_STYLE[state])
     pad = max(2, width - cell_len(left.plain) - cell_len(right.plain))
     line = Text.assemble(left, " " * pad, right, no_wrap=True, overflow="crop")
-    info = Text(f"{eng.get('version', '-')} · {n(eng.get('cards'))} 卡 · 上下文 {n(eng.get('max_context')):,} tok"
-                f" · 运行 {up_s:,.0f}s · pid {n(eng.get('pid')):,}{extra}", style="dim")
-    parts = [line, Text("─" * width, style="dim")]
-    if show_info:
-        parts.append(info)
-    return Group(*parts)
+    return Group(line, Text("─" * width, style="dim"))
 
 
 def k(v: float | None, digits: int = 1) -> str:
@@ -399,23 +438,22 @@ def tiles(m: dict, live: dict, hist: History, core: dict, eng: dict, width: int,
     tile_w = max(18, (width - 3) // 4)
     inner = max(6, tile_w - 4)
     block_w = 2 * tile_w + 1
-    window = History.MAX * interval
 
     hero = Table.grid(padding=(0, 1), expand=True)
     for _ in range(2):
         hero.add_column(ratio=1)
     hero.add_row(
-        speed_tile("提示速度 tok/s（实时）", big_rate(live.get("live_prompt_tps"), BLUE),
-                   Text.assemble(kv("上一条 ", fnum(live.get('last_prompt_tps'), 1)),
-                                 kv(" tok/s · 平均 ", fnum(live.get('prompt_tps'), 1) + " tok/s")),
-                   Text.assemble(kv("分块 ", fnum(opt(core.get('chunk_ms')), 0, ' ms')),
-                                 kv(" · 每行 ", ms(opt(core.get('row_ms'))))),
+        speed_tile("Prompt speed tok/s (live)", big_rate(live.get("live_prompt_tps"), BLUE),
+                   Text.assemble(kv("last request ", fnum(live.get('last_prompt_tps'), 1)),
+                                 kv(" tok/s · mean ", fnum(live.get('prompt_tps'), 1) + " tok/s")),
+                   Text.assemble(kv("chunk ", fnum(opt(core.get('chunk_ms')), 0, ' ms')),
+                                 kv(" · per row ", ms(opt(core.get('row_ms'))))),
                    spark(hist.values("live_prompt_tps"), block_w - 6, BLUE)),
-        speed_tile("解码速度 tok/s（实时）", big_rate(live.get("live_decode_tps")),
-                   Text.assemble(kv("上一条 ", fnum(live.get('last_decode_tps'), 1)),
-                                 kv(" tok/s · 平均 ", fnum(live.get('decode_tps'), 1) + " tok/s")),
-                   Text.assemble(kv("普通步 ", fnum(live.get('step_tps'), 0) + " tok/s"),
-                                 kv(" · 草稿轮 ", fnum(live.get('layer_tps'), 0) + " tok/s")),
+        speed_tile("Decode speed tok/s (live)", big_rate(live.get("live_decode_tps")),
+                   Text.assemble(kv("last request ", fnum(live.get('last_decode_tps'), 1)),
+                                 kv(" tok/s · mean ", fnum(live.get('decode_tps'), 1) + " tok/s")),
+                   Text.assemble(kv("plain steps ", fnum(live.get('step_tps'), 0) + " tok/s"),
+                                 kv(" · draft rounds ", fnum(live.get('layer_tps'), 0) + " tok/s")),
                    spark(hist.values("live_decode_tps"), block_w - 6)),
     )
 
@@ -423,49 +461,49 @@ def tiles(m: dict, live: dict, hist: History, core: dict, eng: dict, width: int,
     for _ in range(4):
         grid.add_column(ratio=1)
     grid.add_row(
-        tile("单步耗时", fnum(live.get("step_ms"), 1, " ms"),
-             Text.assemble(kv("草稿轮 ", fnum(live.get('round_ms'), 0, ' ms'))),
+        tile("Step time", fnum(live.get("step_ms"), 1, " ms"),
+             Text.assemble(kv("draft round ", fnum(live.get('round_ms'), 0, ' ms'))),
              spark(hist.values("step_ms"), inner),
-             extra=Text.assemble(kv("每轮草稿接受 ", fnum(live.get('draft_accept'), 2) + " 个"))),
-        tile("查表命中", pct(live.get("ngram_hit")),
-             Text.assemble(kv("命中 ", f"{k(core.get('ngram_hits'))} / {k(core.get('ngram_rows'))} 行")),
+             extra=Text.assemble(kv("accepted per run ", fnum(live.get('draft_accept'), 2)))),
+        tile("n-gram hits", pct(live.get("ngram_hit")),
+             Text.assemble(kv("hits ", f"{k(core.get('ngram_hits'))} / {k(core.get('ngram_rows'))} rows")),
              bar(live.get("ngram_hit"), inner,
                  AMBER if (live.get("ngram_hit") or 0) < 0.5 else ACCENT),
-             extra=Text.assemble(kv("查表读取 ", f"{k(core.get('ngram_reads'))} 行"))),
-        tile("槽位占用", f"{live['busy']} 请求 · {live['slots']} 槽",
-             Text.assemble(kv("等待 ", str(live['waiting'])), kv(" 读提示 ", str(live['reading'])),
-                           kv(" 解码 ", str(live['writing']))),
+             extra=Text.assemble(kv("SSD reads ", f"{k(core.get('ngram_reads'))} rows"))),
+        tile("Slot usage", f"{live['busy']} requests · {live['slots']} slots",
+             Text.assemble(kv("wait ", str(live['waiting'])), kv(" read ", str(live['reading'])),
+                           kv(" write ", str(live['writing']))),
              bar(live["busy"] / live["slots"] if live["slots"] else None, inner,
                  RED if live["slots"] and live["busy"] > live["slots"] else ACCENT),
-             extra=Text.assemble(kv("平均排队 ", fnum(live.get('queue_s'), 2, ' s')))),
-        tile("引擎线程", pct(live.get("busy_share")),
-             Text.assemble(kv("换出占比 ", pct(live.get('swap_share')))),
+             extra=Text.assemble(kv("mean wait ", fnum(live.get('queue_s'), 2, ' s')))),
+        tile("Engine busy", pct(live.get("busy_share")),
+             Text.assemble(kv("swap share ", pct(live.get('swap_share')))),
              spark(hist.values("busy_share"), inner,
                    AMBER if (live.get("busy_share") or 0) >= 0.95 else ACCENT),
-             extra=Text.assemble(kv("空闲轮 ", f"{n(core.get('idle_rounds'))} 轮"))),
+             extra=Text.assemble(kv("idle rounds ", f"{n(core.get('idle_rounds'))}"))),
     )
     grid.add_row(
-        tile("KV 页", f"{live['kv_used']:,}/{live['kv_pool']:,}",
-             Text.assemble(kv("ckpt ", f"{n(core.get('kv_pages_checkpoints'))} 个"),
-                           kv(" · 占用 ", pct(live.get('kv_ratio')))),
+        tile("KV pages", f"{live['kv_used']:,}/{live['kv_pool']:,}",
+             Text.assemble(kv("ckpt ", f"{n(core.get('kv_pages_checkpoints'))}"),
+                           kv(" · used ", pct(live.get('kv_ratio')))),
              bar(live.get("kv_ratio"), inner,
                  AMBER if (live.get("kv_ratio") or 0) >= 0.9 else ACCENT),
-             extra=Text.assemble(kv("槽位持有 ", f"{n(core.get('kv_pages_slots')):,} 页"))),
-        tile("专家缓存", f"{n(core.get('experts_cached'))}/{n(core.get('experts_floor'))}",
-             Text.assemble(kv("每行未命中 ", fnum(live.get('miss_per_row'), 1, ' 个'))),
+             extra=Text.assemble(kv("held by slots ", f"{n(core.get('kv_pages_slots')):,}"))),
+        tile("Expert cache", f"{n(core.get('experts_cached'))}/{n(core.get('experts_floor'))}",
+             Text.assemble(kv("misses per row ", fnum(live.get('miss_per_row'), 1))),
              spark(hist.values("miss_per_row"), inner),
-             extra=Text.assemble(kv("下限 ", f"{n(core.get('experts_floor'))} 个"))),
-        tile("缺页", f"{n(core.get('major_faults')):,} 次",
-             Text.assemble(kv("停顿 ", f"{n(core.get('stalls'))} 次"),
-                           kv("·空转 ", f"{n(core.get('idle_rounds'))} 轮")),
-             Text("自启动累计", style="dim"),
-             extra=Text.assemble(kv("换出到主机 ", f"{n(core.get('swapped_out_pages'))} 页"))),
-        tile("会话累计", f"{live['requests']} 请求",
-             Text.assemble(kv("提示 ", f"{k(live.get('prompt_tokens'), 0)}"),
-                           kv(" 输出 ", f"{k(live.get('completion_tokens'), 0)} tok")),
-             Text.assemble(kv("累计排队 ", fnum(live.get('queue_seconds'), 0, ' s'))),
-             extra=Text.assemble(kv("错误 ", str(live['errors'])),
-                                 kv(" · 缓存 ", f"{k(live.get('cached_tokens'))} tok"))),
+             extra=Text.assemble(kv("floor ", f"{n(core.get('experts_floor'))}"))),
+        tile("Major faults", f"{n(core.get('major_faults')):,}",
+             Text.assemble(kv("stalls ", f"{n(core.get('stalls'))}"),
+                           kv(" · idle ", f"{n(core.get('idle_rounds'))}")),
+             Text("since open", style="dim"),
+             extra=Text.assemble(kv("swapped out ", f"{n(core.get('swapped_out_pages'))}"))),
+        tile("Session totals", f"{live['requests']} requests",
+             Text.assemble(kv("prompt ", f"{k(live.get('prompt_tokens'), 0)}"),
+                           kv(" output ", f"{k(live.get('completion_tokens'), 0)}")),
+             Text.assemble(kv("queued ", fnum(live.get('queue_seconds'), 0, ' s'))),
+             extra=Text.assemble(kv("errors ", str(live['errors'])),
+                                 kv(" · cached ", f"{k(live.get('cached_tokens'))}"))),
     )
     return hero, grid
 
@@ -536,7 +574,7 @@ def facts(m: dict, live: dict, core: dict, eng: dict, width: int) -> tuple[Panel
         name = (f[0].replace("(R)", "").replace("(TM)", "").replace("_", " ")
                 .replace(" Graphics", "") if f else "")
         vram = _f(f[1]) if len(f) > 1 else ""
-        cores = _f(f[3]).replace("Xe cores", "Xe 核") if len(f) > 3 else ""
+        cores = _f(f[3]) if len(f) > 3 else ""
         pcie = _f(f[4]) if len(f) > 4 else ""
         used = _f(plan)
         parts = [Text(name, style="default")]
@@ -544,7 +582,7 @@ def facts(m: dict, live: dict, core: dict, eng: dict, width: int) -> tuple[Panel
             if x:
                 parts += [dot, Text(x, style="default")]
         if used:
-            parts += [dot, kv("占用 ", used)]
+            parts += [dot, kv("used ", used)]
         hw_row(f"GPU {i}", *parts)
 
     avail, arena = _fit(eng.get("fit_mem_available")), _fit(eng.get("fit_arena"))
@@ -553,67 +591,66 @@ def facts(m: dict, live: dict, core: dict, eng: dict, width: int) -> tuple[Panel
     def pick(parts: list[str]) -> str:
         return "/".join(x for x in parts if x and x != "-") or "—"
 
-    hw_row("内存", kv("可用 ", "/".join(avail[:3]) if any(avail) else "—"),
-           Text("（主机/规划/核心）", style="dim"))
+    hw_row("Memory", kv("available ", "/".join(avail[:3]) if any(avail) else "—"),
+           Text(" (host / plan / core)", style="dim"))
     hw_row("", kv("arena ", pick(arena)), dot, kv("pinned ", pick(pinned)),
-           dot, kv("交换 ", _f(swap[0].split(",")[0]) if swap and swap[0] else "—"))
+           dot, kv("swap ", _f(swap[0].split(",")[0]) if swap and swap[0] else "—"))
 
     cpu = _fit(eng.get("fit_cpu"))
     cpu_host = cpu[0].split(",") if cpu and cpu[0] else []
     cpu_name = (cpu_host[0].replace("_", " ").replace(" 12-Core Processor", "")
                 if cpu_host else "")
-    workers = (_f(cpu[2]).replace("workers", "工作线程") if len(cpu) > 2 else "")
+    workers = _f(cpu[2]) if len(cpu) > 2 else ""
     read, loader = _fit(eng.get("fit_host_read")), _fit(eng.get("fit_loader"))
-    threads = _f(loader[2]).replace("threads", "线程") if len(loader) > 2 else ""
-    hw_row("CPU", kv("型号 ", cpu_name),
-           dot, Text(", ".join(x.replace("CPUs", "CPU").replace("cores", "核")
-                               for x in (_f(v) for v in cpu_host[1:3]) if x), style="default"),
-           dot, Text(workers, style="default"),
-           dot, kv("读 ", gbs(_f(read[2])) if len(read) > 2 else "—"),
+    threads = _f(loader[2]) if len(loader) > 2 else ""
+    hw_row("CPU", Text(cpu_name, style="default"),
+           dot, Text(", ".join(x for x in (_f(v) for v in cpu_host[1:3]) if x), style="default"),
+           dot, Text(workers, style="default"))
+    hw_row("", kv("read ", gbs(_f(read[2])) if len(read) > 2 else "—"),
            dot, kv("loader ", gbs(_f(loader[0])) or "—"),
            kv(" · ", threads))
 
     c0, c1, ngram = _fit(eng.get("fit_copy0")), _fit(eng.get("fit_copy1")), _fit(eng.get("fit_ngram"))
-    hw_row("拷贝", kv("卡0 ", gbs(_f(c0[2])) if len(c0) > 2 else "—"),
-           dot, kv("卡1 ", gbs(_f(c1[2])) if len(c1) > 2 else "—"),
-           dot, kv("ngram ", (_f(ngram[0]).replace("us a 4KiB read", " us / 4 KiB 读")
-                              if ngram and ngram[0] else "—")))
+    hw_row("Copies", kv("card 0 ", gbs(_f(c0[2])) if len(c0) > 2 else "—"),
+           dot, kv("card 1 ", gbs(_f(c1[2])) if len(c1) > 2 else "—"),
+           dot, kv("n-gram ", (_f(ngram[0]).replace("us a 4KiB read", " us per 4 KiB read")
+                               if ngram and ngram[0] else "—")))
 
-    st_row("载入", kv("耗时 ", fnum(opt(eng.get("load_s")), 1, " s")),
-           dot, kv("后端 ", _f(eng.get("backend")) or "—"),
-           dot, kv("计划数 ", f"{n(core.get('plans')):,}"),
-           dot, kv("swap ", f"{n(core.get('swaps')):,} 页 / {n(core.get('swap_rounds')):,} 轮"))
-    st_row("", kv("checkpoint ", f"存 {n(core.get('checkpoints_taken'))} / 取 {n(core.get('restores'))}"),
-           dot, kv("冷启 ", str(n(core.get("cold_admits")))),
-           dot, kv("欠时 ", fnum(opt(core.get("owed_ms")), 0, " ms")))
-    st_row("窗口", kv("读入 ", fnum(der.get("window_rows_per_s"), 0, " 行/s")),
+    st_row("Load", kv("time ", fnum(opt(eng.get("load_s")), 1, " s")),
+           dot, kv("backend ", _f(eng.get("backend")) or "—"),
+           dot, kv("plans ", f"{n(core.get('plans')):,}"),
+           dot, kv("swap ", f"{n(core.get('swaps')):,} experts / {n(core.get('swap_rounds')):,} rounds"))
+    st_row("", kv("checkpoints ", f"taken {n(core.get('checkpoints_taken'))} / restored {n(core.get('restores'))}"),
+           dot, kv("cold admits ", str(n(core.get("cold_admits")))),
+           dot, kv("decode owed ", fnum(opt(core.get("owed_ms")), 0, " ms")))
+    st_row("Window", kv("read ", fnum(der.get("window_rows_per_s"), 0, " rows/s")),
            dot, kv("lookup ", fnum(der.get("lookup_tokens_per_s"), 1, " tok/s")),
            dot, kv("draft pass ", fnum(der.get("draft_pass_ms"), 1, " ms")),
-           kv(" (", pct(der.get("draft_pass_share")) + ")"),
-           dot, kv("未草稿步 ", pct(der.get("undrafted_share"))),
-           dot, kv("读提示轮 ", pct(der.get("reading_round_share"))))
+           kv(" (", pct(der.get("draft_pass_share")) + ")"))
+    st_row("", kv("undrafted steps ", pct(der.get("undrafted_share"))),
+           dot, kv("rounds while reading ", pct(der.get("reading_round_share"))))
     depths = " ".join(f"@{d} {pct(der.get(f'layer_accepted_at_{d}'))}"
                       for d in range(1, 8) if der.get(f"layer_accepted_at_{d}") is not None)
     stops = " ".join(f"{label} {pct(der.get(f'layer_stopped_at_{key}'))}"
-                     for key, label in (("max", "到顶"), ("share", "到份额"),
-                                        ("p", "低于阈值"), ("choice", "核心选"))
+                     for key, label in (("max", "max"), ("share", "share"),
+                                        ("p", "min_p"), ("choice", "core's choice"))
                      if der.get(f"layer_stopped_at_{key}") is not None)
     if depths:
-        st_row("draft", kv("接受 ", depths))
+        st_row("draft", kv("accepted ", depths))
     if stops:
-        st_row("", kv("停止 ", stops))
+        st_row("", kv("stopped ", stops))
 
-    return (Panel(st, title=Text("统计", style="dim"), title_align="left", border_style="dim",
+    return (Panel(st, title=Text("Stats", style="dim"), title_align="left", border_style="dim",
                   box=box.ROUNDED, width=width, padding=(0, 1)),
-            Panel(hw, title=Text("硬件", style="dim"), title_align="left", border_style="dim",
+            Panel(hw, title=Text("Hardware", style="dim"), title_align="left", border_style="dim",
                   box=box.ROUNDED, width=width, padding=(0, 1)))
 
 
 def recent_table(recent: list, width: int) -> Panel:
     table = Table(box=None, pad_edge=False, expand=True)
-    for col in ("结束", "提示 tok", "缓存 tok", "输出 tok", "耗时", "排队", "提示 tok/s", "解码 tok/s",
-                "步数", "草稿", "接受"):
-        table.add_column(col, justify="left" if col == "结束" else "right", style="dim" if col == "结束" else "")
+    for col in ("finish", "prompt", "cached", "output", "time", "queue", "prompt tok/s",
+                "decode tok/s", "steps", "drafts", "accepted"):
+        table.add_column(col, justify="left" if col == "finish" else "right", style="dim" if col == "finish" else "")
     for r in recent:
         table.add_row(
             Text(str(r.get("finish", "-")), style=finish_style(r.get("finish"))),
@@ -622,17 +659,17 @@ def recent_table(recent: list, width: int) -> Panel:
             f"{num(r.get('seconds')):,.3f}s", ms(opt(r.get("queue_ms"))), req_pp(r), req_tg(r),
             f"{n(r.get('steps')):,}", f"{n(r.get('drafts')):,}", f"{n(r.get('accepted')):,}",
         )
-    return Panel(table, title=Text(f"最近请求 · {len(recent)}", style="dim"), title_align="left",
+    return Panel(table, title=Text(f"Recent requests · {len(recent)}", style="dim"), title_align="left",
                  border_style="dim", box=box.ROUNDED, padding=(0, 1), width=width)
 
 
 def hint(interval: float) -> Text:
-    return Text(f"↑↓ {SCROLL_STEP} 行   PgUp/PgDn 整页   g/G 到顶/到底   Ctrl+C 退出   · 每 {interval:g}s 刷新",
+    return Text(f"↑↓ {SCROLL_STEP} rows   PgUp/PgDn page   g/G top/bottom   Ctrl+C quit   · every {interval:g}s refresh",
                 style="dim")
 
 
-def render(m: dict, live: dict, hist: History, state: str, model_path: str | None,
-           url: str, interval: float, width: int) -> Group:
+def render(m: dict, live: dict, hist: History, state: str,
+           props: dict | None, model_name: str | None, url: str, interval: float, width: int) -> Group:
     core = m.get("core", {})
     eng = m.get("engine", {})
     up_s = num(core.get("up_ns")) / 1e9
@@ -644,10 +681,11 @@ def render(m: dict, live: dict, hist: History, state: str, model_path: str | Non
     body.add_row(Text(""))
     body.add_row(grid)
     blank = [Text("")]
-    return Group(header(url, state, model_path, eng, up_s, live, width),
+    return Group(header(url, state, live, width),
                  *blank, body, *blank,
                  stats, *blank,
                  recent_table(m.get("recent", []), width), *blank,
+                 model_panel(props, model_name, eng, up_s, width), *blank,
                  hardware, *blank, hint(interval))
 
 
@@ -663,7 +701,7 @@ class Painter:
 
     def __enter__(self) -> "Painter":
         if not self.console.is_terminal:
-            raise SystemExit("monitor 需要终端")
+            raise SystemExit("monitor needs a terminal")
         self.active = self.console.set_alt_screen(True)
         self.console.show_cursor(False)
         return self
@@ -761,7 +799,7 @@ class Keys:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="monitor", description="c0ven 终端监控, 每 1s 刷新")
+    p = argparse.ArgumentParser(prog="monitor", description="c0ven terminal monitor, refreshed every --interval seconds")
     p.add_argument("url", nargs="?", default="http://127.0.0.1:8080")
     p.add_argument("--interval", type=float, default=1.0)
     args = p.parse_args()
@@ -773,7 +811,8 @@ def main() -> None:
     rates = Rates(3 * args.interval)
     poller = Poller(args.url, args.interval)
     live: dict = {}
-    model_path: str | None = None
+    props: dict | None = None
+    model_name: str | None = None
     offset: int | None = None
     doc: list | None = None
     doc_raw: dict | None = None
@@ -783,8 +822,9 @@ def main() -> None:
     with Painter(console) as paint, Keys() as keys:
         while True:
             t0 = time.monotonic()
-            raw, path = poller.current()
-            model_path = path or model_path
+            raw, fresh, fresh_name = poller.current()
+            props = fresh or props
+            model_name = fresh_name or model_name
             if raw is not None and raw != doc_raw:
                 live = api_values(raw)
                 rates.add(raw.get("core") or {}, time.monotonic())
@@ -800,11 +840,11 @@ def main() -> None:
             if doc is None or raw != doc_raw or state != doc_state or size != doc_size:
                 width = min(size.width, MAX_WIDTH)
                 group: Group = (
-                    render({**raw, "recent": log.items}, live, hist, state, model_path, args.url,
-                           args.interval, width)
+                    render({**raw, "recent": log.items}, live, hist, state, props, model_name,
+                           args.url, args.interval, width)
                     if raw and raw.get("core") else
-                    Group(header(args.url, state, model_path, {}, 0.0, live, width),
-                          Text("没有数据, 等下一次刷新…", style="dim")))
+                    Group(header(args.url, state, live, width),
+                          Text("no data yet, waiting for the next refresh…", style="dim")))
                 doc = console.render_lines(group, console.options, pad=False)
                 doc_raw, doc_state, doc_size = raw, state, size
             _, max_off = paint.show(doc, offset)
